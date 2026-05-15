@@ -2,13 +2,19 @@ cmake_minimum_required(VERSION 3.16)
 
 project(JeriBot LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(JeriBot
-    src/main.cpp
-    src/app.rc
+file(GLOB_RECURSE JERIBOT_SOURCES CONFIGURE_DEPENDS
+    "src/*.cpp"
+    "src/*.rc"
 )
+
+add_executable(JeriBot WIN32
+    ${JERIBOT_SOURCES}
+)
+
+target_include_directories(JeriBot PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 target_compile_options(JeriBot PRIVATE /utf-8)
 
@@ -23,6 +29,7 @@ target_link_libraries(JeriBot PRIVATE
     ole32
     oleaut32
     uiautomationcore
+    user32
 )
 
 install(TARGETS JeriBot

@@ -4,19 +4,33 @@ Set-Location $scriptDir
 
 Write-Host "杰睿 JeriBot - 构建脚本"
 Write-Host "请选择要编译的架构："
-Write-Host "[1]x64   [2]x86"
+Write-Host "[1]x64   [2]x86   [3]x64（完整日志）"
 
 $choice = [Console]::ReadKey($true).KeyChar
+$VERBOSE = $false
 if ($choice -eq "2") {
     Write-Host "已选择架构x86"
     $ARCH = "x86"
     $ARCH_ARG = "Win32"
     $OUT_NAME = "JeriBot_x86.exe"
+} elseif ($choice -eq "3") {
+    Write-Host "已选择架构x64（完整日志）"
+    $ARCH = "x64"
+    $ARCH_ARG = "x64"
+    $OUT_NAME = "JeriBot_x64.exe"
+    $VERBOSE = $true
 } else {
     Write-Host "已选择架构x64"
     $ARCH = "x64"
     $ARCH_ARG = "x64"
     $OUT_NAME = "JeriBot_x64.exe"
+}
+
+function Die {
+    Write-Host "构建失败！"
+    Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"
+    Read-Host
+    exit 1
 }
 
 Write-Host "准备构建..."
@@ -27,6 +41,7 @@ $TEMP_ROOT = Join-Path $scriptDir "..\Debug\Temp"
 $BUILD_DIR = Join-Path $TEMP_ROOT "build\$ARCH"
 $INSTALL_DIR = Join-Path $TEMP_ROOT "install\$ARCH"
 $DIST_ROOT = Join-Path $scriptDir "..\Debug\Export"
+$REDIR = if ($VERBOSE) { "" } else { ">`$null 2>&1" }
 
 if (Test-Path $TEMP_ROOT) { Remove-Item -Recurse -Force $TEMP_ROOT -ErrorAction SilentlyContinue }
 if (Test-Path $DIST_ROOT) { Remove-Item -Recurse -Force $DIST_ROOT -ErrorAction SilentlyContinue }
@@ -35,14 +50,14 @@ New-Item -ItemType Directory -Force $INSTALL_DIR | Out-Null
 New-Item -ItemType Directory -Force $DIST_ROOT | Out-Null
 
 Write-Host "正在编译..."
-cmake -S $ROOT_DIR -B $BUILD_DIR -A $ARCH_ARG >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Host "构建失败！"; Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"; Read-Host; exit 1 }
-cmake --build $BUILD_DIR --config $CONFIG >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Host "构建失败！"; Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"; Read-Host; exit 1 }
+Invoke-Expression "cmake -S `"$ROOT_DIR`" -B `"$BUILD_DIR`" -A $ARCH_ARG $REDIR"
+if ($LASTEXITCODE -ne 0) { Die }
+Invoke-Expression "cmake --build `"$BUILD_DIR`" --config $CONFIG $REDIR"
+if ($LASTEXITCODE -ne 0) { Die }
 
 Write-Host "正在输出..."
-cmake --install $BUILD_DIR --config $CONFIG --prefix $INSTALL_DIR >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Host "构建失败！"; Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"; Read-Host; exit 1 }
+Invoke-Expression "cmake --install `"$BUILD_DIR`" --config $CONFIG --prefix `"$INSTALL_DIR`" $REDIR"
+if ($LASTEXITCODE -ne 0) { Die }
 Copy-Item "$INSTALL_DIR\JeriBot.exe" (Join-Path $DIST_ROOT $OUT_NAME) -ErrorAction Stop
 
 Write-Host "清理缓存..."

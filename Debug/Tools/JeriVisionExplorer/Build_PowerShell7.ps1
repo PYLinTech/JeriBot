@@ -19,6 +19,13 @@ if ($choice -eq "2") {
     $OUT_NAME = "JeriVisionExplorer_x64.exe"
 }
 
+function Die {
+    Write-Host "构建失败！"
+    Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"
+    Read-Host
+    exit 1
+}
+
 Write-Host "准备构建..."
 
 $CONFIG = "Release"
@@ -36,13 +43,13 @@ New-Item -ItemType Directory -Force $DIST_ROOT | Out-Null
 
 Write-Host "正在编译..."
 cmake -S $ROOT_DIR -B $BUILD_DIR -A $ARCH_ARG >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Host "构建失败！"; Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"; Read-Host; exit 1 }
+if ($LASTEXITCODE -ne 0) { Die }
 cmake --build $BUILD_DIR --config $CONFIG >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Host "构建失败！"; Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"; Read-Host; exit 1 }
+if ($LASTEXITCODE -ne 0) { Die }
 
 Write-Host "正在输出..."
 cmake --install $BUILD_DIR --config $CONFIG --prefix $INSTALL_DIR >$null 2>&1
-if ($LASTEXITCODE -ne 0) { Write-Host "构建失败！"; Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"; Read-Host; exit 1 }
+if ($LASTEXITCODE -ne 0) { Die }
 Copy-Item "$INSTALL_DIR\JeriVisionExplorer.exe" (Join-Path $DIST_ROOT $OUT_NAME) -ErrorAction Stop
 
 Write-Host "清理缓存..."

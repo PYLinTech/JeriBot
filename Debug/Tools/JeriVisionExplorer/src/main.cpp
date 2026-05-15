@@ -2822,6 +2822,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SendMessageW(gChkAnnotate, BM_SETCHECK, BST_CHECKED, 0);
         gTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS | TVS_SHOWSELALWAYS, 0,0,0,0, hwnd, (HMENU)IDC_TREE, gInst, NULL);
         gStatus = CreateWindowW(L"STATIC", L"就绪。", WS_CHILD | WS_VISIBLE | SS_LEFT, 0,0,0,0, hwnd, (HMENU)IDC_STATUS, gInst, NULL);
+        {
+            HFONT guiFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            if (guiFont) {
+                SendMessageW(gBtnRefresh, WM_SETFONT, (WPARAM)guiFont, TRUE);
+                SendMessageW(gBtnAnalyze, WM_SETFONT, (WPARAM)guiFont, TRUE);
+                SendMessageW(gChkAnnotate, WM_SETFONT, (WPARAM)guiFont, TRUE);
+                SendMessageW(gTree, WM_SETFONT, (WPARAM)guiFont, TRUE);
+                SendMessageW(gStatus, WM_SETFONT, (WPARAM)guiFont, TRUE);
+            }
+        }
         RefreshWindows();
         return 0;
     case WM_SIZE:

@@ -3130,7 +3130,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+// DPI 感知，避免高分辨率下窗口模糊
+#ifndef DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+#define DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 ((DPI_AWARENESS_CONTEXT)-4)
+#endif
+
+static void EnableDpiAwareness() {
+    HMODULE user32 = LoadLibraryW(L"user32.dll");
+    if (user32) {
+        typedef BOOL (WINAPI *PFN_SetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
+        PFN_SetProcessDpiAwarenessContext p = (PFN_SetProcessDpiAwarenessContext)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        if (p && p(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+            FreeLibrary(user32);
+            return;
+        }
+        typedef BOOL (WINAPI *PFN_SetProcessDPIAware)(void);
+        PFN_SetProcessDPIAware p2 = (PFN_SetProcessDPIAware)GetProcAddress(user32, "SetProcessDPIAware");
+        if (p2) p2();
+        FreeLibrary(user32);
+    }
+}
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
+    EnableDpiAwareness();
     g_hInst = hInstance;
     g_hOverlayBrush = CreateSolidBrush(RGB(255, 64, 64));
     RegisterOverlayClass();
