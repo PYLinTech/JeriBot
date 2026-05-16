@@ -1,7 +1,7 @@
 #include "ConversationManager.h"
+#include "Json/Json.h"
 
 #include <chrono>
-#include <filesystem>
 #include <fstream>
 
 namespace JeriBot {
@@ -17,6 +17,27 @@ static bool isValidGroupName(const std::string& name)
         }
     }
     if (name == "." || name == "..") return false;
+    return true;
+}
+
+std::filesystem::path ConversationManager::convFilePath(const std::string& group, const std::string& id) const
+{
+    std::filesystem::path basePath = std::filesystem::u8path(groupsDir_);
+    return basePath / std::filesystem::u8path(group) / (id + ".json");
+}
+
+bool ConversationManager::writeFile(const std::filesystem::path& path, const std::string& data, std::string& error)
+{
+    std::ofstream ofs(path, std::ios::binary);
+    if (!ofs) {
+        error = "无法写入文件";
+        return false;
+    }
+    ofs.write(data.c_str(), static_cast<std::streamsize>(data.size()));
+    if (!ofs) {
+        error = "写入文件失败";
+        return false;
+    }
     return true;
 }
 
@@ -120,19 +141,63 @@ bool ConversationManager::deleteGroup(const std::string& name, std::string& erro
     return true;
 }
 
-static std::string generateId()
+bool ConversationManager::deleteConversation(const std::string& group, const std::string& id, std::string& error)
 {
-    auto now = std::chrono::system_clock::now();
-    return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count());
+    std::filesystem::path filePath = convFilePath(group, id);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(filePath, ec)) {
+        error = "会话不存在";
+        return false;
+    }
+
+    if (!std::filesystem::remove(filePath, ec)) {
+        error = "删除会话失败：" + ec.message();
+        return false;
+    }
+
+    return true;
+}
+
+bool ConversationManager::renameConversation(const std::string& group, const std::string& id, const std::string& newName, std::string& error)
+{
+    std::filesystem::path filePath = convFilePath(group, id);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(filePath, ec)) {
+        error = "会话不存在";
+        return false;
+    }
+
+    std::ifstream ifs(filePath, std::ios::binary);
+    if (!ifs) {
+        error = "无法读取会话文件";
+        return false;
+    }
+    std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+
+    std::string parseErr;
+    Json doc = Json::parse(content, parseErr);
+    if (!parseErr.empty() || !doc.isObject()) {
+        error = "会话文件格式无效";
+        return false;
+    }
+
+    doc["name"] = newName;
+    doc["updateTime"] = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+
+    return writeFile(filePath, doc.dump(2), error);
 }
 
 std::string ConversationManager::newConversation(std::string group, std::string& outId, std::string& error)
 {
     if (group.empty()) group = "Default";
 
-    std::filesystem::path base = std::filesystem::u8path(groupsDir_);
-    std::filesystem::path groupPath = base / std::filesystem::u8path(group);
+    std::filesystem::path basePath = std::filesystem::u8path(groupsDir_);
+    std::filesystem::path groupPath = basePath / std::filesystem::u8path(group);
 
     std::error_code ec;
     if (!std::filesystem::exists(groupPath, ec)) {
@@ -140,31 +205,68 @@ std::string ConversationManager::newConversation(std::string group, std::string&
         return {};
     }
 
-    std::string id = generateId();
-    auto ts = std::stoll(id);
+    auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string id = std::to_string(ts);
 
-    std::string jsonStr =
-        "{\n"
-        "  \"id\": \"" + id + "\",\n"
-        "  \"name\": \"\",\n"
-        "  \"updateTime\": " + std::to_string(ts) + ",\n"
-        "  \"data\": []\n"
-        "}";
+    Json doc = Json::Object{};
+    doc["id"] = id;
+    doc["name"] = std::string();
+    doc["updateTime"] = static_cast<double>(ts);
+    doc["data"] = Json::Array{};
 
-    std::filesystem::path filePath = groupPath / (id + ".json");
-    std::ofstream ofs(filePath, std::ios::binary);
-    if (!ofs) {
-        error = "无法创建会话文件";
-        return {};
-    }
-    ofs.write(jsonStr.c_str(), static_cast<std::streamsize>(jsonStr.size()));
-    if (!ofs) {
-        error = "写入会话文件失败";
+    std::filesystem::path filePath = convFilePath(group, id);
+    if (!writeFile(filePath, doc.dump(2), error)) {
         return {};
     }
 
     outId = id;
     return group;
+}
+
+std::vector<GroupInfo> ConversationManager::listGroups(std::string& error)
+{
+    std::vector<GroupInfo> result;
+    std::filesystem::path base = std::filesystem::u8path(groupsDir_);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(base, ec)) {
+        return result;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(base, ec)) {
+        if (!entry.is_directory()) continue;
+
+        GroupInfo group;
+        auto u8Name = entry.path().filename().u8string();
+        group.name = {u8Name.begin(), u8Name.end()};
+
+        std::error_code ec2;
+        for (const auto& file : std::filesystem::directory_iterator(entry.path(), ec2)) {
+            if (!file.is_regular_file()) continue;
+            auto ext = file.path().extension();
+            if (ext != L".json") continue;
+
+            std::ifstream ifs(file.path(), std::ios::binary);
+            if (!ifs) continue;
+            std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+            ifs.close();
+
+            std::string parseErr;
+            Json doc = Json::parse(content, parseErr);
+            if (!parseErr.empty() || !doc.isObject()) continue;
+
+            ConversationInfo conv;
+            if (doc.contains("id") && doc["id"].isString()) conv.id = doc["id"].asString();
+            if (doc.contains("name") && doc["name"].isString()) conv.name = doc["name"].asString();
+            if (doc.contains("updateTime") && doc["updateTime"].isNumber()) conv.updateTime = static_cast<long long>(doc["updateTime"].asNumber());
+            group.conversations.push_back(std::move(conv));
+        }
+
+        result.push_back(std::move(group));
+    }
+
+    return result;
 }
 
 const std::string& ConversationManager::conversationDir() const

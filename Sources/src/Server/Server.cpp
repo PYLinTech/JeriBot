@@ -1,4 +1,4 @@
-#include "Server.h"
+﻿#include "Server.h"
 #include "Conversation/ConversationManager.h"
 #include "Json/Json.h"
 #include "resource_ids.h"
@@ -129,7 +129,6 @@ enum class HttpMethod { Get, Post, Other };
 struct ParsedRequest {
     HttpMethod method;
     std::string path;
-    std::string query;
     std::string body;
 };
 
@@ -155,19 +154,13 @@ ParsedRequest parseRequest(std::string_view data)
     else if (methodStr == "POST") req.method = HttpMethod::Post;
     else req.method = HttpMethod::Other;
 
-    auto qpos = req.path.find('?');
-    if (qpos != std::string::npos) {
-        req.query = req.path.substr(qpos + 1);
-        req.path.resize(qpos);
+    for (char& c : req.path) {
+        if (c == '\\') c = '/';
     }
 
     size_t headerEnd = data.find("\r\n\r\n");
     if (headerEnd != std::string_view::npos) {
         req.body = std::string(data.substr(headerEnd + 4));
-    }
-
-    for (char& c : req.path) {
-        if (c == '\\') c = '/';
     }
 
     return req;
@@ -271,6 +264,75 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
             return buildJsonResponse(400, "Bad Request", jsonError(error));
         }
         std::string json = R"({"result":"success","group":")" + resolvedGroup + R"(","id":")" + outId + R"("})";
+        return buildJsonResponse(200, "OK", json);
+    }
+
+    if (path == "/api/conversation/delete") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("group") || !body["group"].isString() ||
+            !body.contains("id") || !body["id"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少group或id字段"})");
+        }
+        const std::string& group = body["group"].asString();
+        const std::string& id = body["id"].asString();
+        if (group.empty() || id.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"group和id不能为空"})");
+        }
+        std::string error;
+        if (mgr->deleteConversation(group, id, error)) {
+            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (path == "/api/conversation/rename") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("group") || !body["group"].isString() ||
+            !body.contains("id") || !body["id"].isString() ||
+            !body.contains("name") || !body["name"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少group、id或name字段"})");
+        }
+        const std::string& group = body["group"].asString();
+        const std::string& id = body["id"].asString();
+        const std::string& name = body["name"].asString();
+        if (group.empty() || id.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"group和id不能为空"})");
+        }
+        std::string error;
+        if (mgr->renameConversation(group, id, name, error)) {
+            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (path == "/api/conversation/list") {
+        if (req.method != HttpMethod::Get) {
+            return buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持GET"})");
+        }
+        std::string error;
+        auto groups = mgr->listGroups(error);
+        if (!error.empty()) {
+            return buildJsonResponse(400, "Bad Request", jsonError(error));
+        }
+        std::string json = R"({"result":"success","data":[)";
+        for (size_t i = 0; i < groups.size(); ++i) {
+            const auto& g = groups[i];
+            if (i > 0) json += ",";
+            json += R"({"group":")" + g.name + R"(","conversations":[)";
+            for (size_t j = 0; j < g.conversations.size(); ++j) {
+                const auto& c = g.conversations[j];
+                if (j > 0) json += ",";
+                json += R"({"id":")" + c.id + R"(","name":")" + c.name + R"(","updateTime":)" + std::to_string(c.updateTime) + "}";
+            }
+            json += "]}";
+        }
+        json += "]}";
         return buildJsonResponse(200, "OK", json);
     }
 
