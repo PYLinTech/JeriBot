@@ -1,34 +1,34 @@
 const app = document.getElementById("app");
-const toggleSidebar = document.getElementById("toggleSidebar");
-const sidebarOverlay = document.getElementById("sidebarOverlay");
-const mobileSidebarButtons = document.querySelectorAll(".mobileSidebarButton");
+const overlay = document.getElementById("overlay");
+const mql = window.matchMedia("(max-width: 760px)");
 
-function isMobileLayout() {
-  return window.matchMedia("(max-width: 760px)").matches;
+function isMobile() { return mql.matches; }
+
+function openSidebar() {
+  app.classList.remove("collapsed");
+  app.classList.add("open");
 }
 
-function openMobileSidebar() {
-  if (!isMobileLayout()) return;
-  app.classList.add("mobileSidebarOpen");
+function closeSidebar() {
+  app.classList.remove("open");
 }
 
-function closeMobileSidebar() {
-  app.classList.remove("mobileSidebarOpen");
-}
-
-toggleSidebar.addEventListener("click", () => {
-  if (isMobileLayout()) {
-    openMobileSidebar();
-  } else {
-    app.classList.toggle("sidebarCollapsed");
-    const collapsed = app.classList.contains("sidebarCollapsed");
-    toggleSidebar.setAttribute("aria-label", collapsed ? "展开侧边栏" : "折叠侧边栏");
-    toggleSidebar.setAttribute("title", collapsed ? "展开侧边栏" : "折叠侧边栏");
+document.getElementById("toggleSidebar").addEventListener("click", () => {
+  if (isMobile()) {
+    app.classList.contains("open") ? closeSidebar() : openSidebar();
+    return;
   }
+  app.classList.toggle("collapsed");
+  const c = app.classList.contains("collapsed");
+  document.getElementById("toggleSidebar").setAttribute("aria-label", c ? "展开侧边栏" : "折叠侧边栏");
 });
 
-sidebarOverlay.addEventListener("click", closeMobileSidebar);
+overlay.addEventListener("click", closeSidebar);
 
-for (const button of mobileSidebarButtons) {
-  button.addEventListener("click", openMobileSidebar);
-}
+document.querySelector(".mobileMenuBtn").addEventListener("click", () => {
+  if (isMobile()) openSidebar();
+});
+
+mql.addEventListener("change", () => {
+  if (!isMobile()) app.classList.remove("open");
+});
