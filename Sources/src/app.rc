@@ -1,11 +1,17 @@
 #pragma code_page(65001)
-#include <windows.h>
+
+#include "resource_ids.h"
 
 // 应用程序图标
 MAINICON ICON "../JeriBot_Icon.ico"
 
 // 嵌入静态资源
-index.html ASSETS "Assets/index.html"
+RES_INDEX_HTML      RCDATA "Assets/index.html"
+RES_STYLE_CSS       RCDATA "Assets/style.css"
+RES_APP_JS          RCDATA "Assets/app.js"
+RES_REMIXICON_CSS   RCDATA "Assets/remixicon.css"
+RES_REMIXICON_WOFF2 RCDATA "Assets/remixicon.woff2"
+RES_FAVICON_ICO     RCDATA "../JeriBot_Icon.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 26,5,16,0

@@ -1,11 +1,70 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>杰睿 JeriBot</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>杰睿 JeriBot</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/remixicon.css">
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<h1>杰睿 JeriBot</h1>
+  <main id="app" class="app">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebarTop">
+        <button id="toggleSidebar" class="iconButton" type="button" aria-label="折叠侧边栏" title="折叠侧边栏">
+          <img class="brandLogo" src="/favicon.ico" alt="" aria-hidden="true">
+        </button>
+        <div class="brandBlock">
+          <strong>杰睿 JeriBot</strong>
+        </div>
+      </div>
+
+      <nav class="chatNav" aria-label="导航">
+        <div id="chatList" class="chatList"></div>
+      </nav>
+
+      <div class="sidebarBottom">
+        <button class="settingsButton" type="button">
+          <i class="ri-user-smile-line navIcon" aria-hidden="true"></i>
+          <span class="label">人格</span>
+        </button>
+        <button class="settingsButton" type="button">
+          <i class="ri-magic-line navIcon" aria-hidden="true"></i>
+          <span class="label">技能</span>
+        </button>
+        <button class="settingsButton" type="button">
+          <i class="ri-brain-line navIcon" aria-hidden="true"></i>
+          <span class="label">记忆</span>
+        </button>
+        <button class="settingsButton" type="button">
+          <i class="ri-tools-line navIcon" aria-hidden="true"></i>
+          <span class="label">工具</span>
+        </button>
+        <button class="settingsButton" type="button">
+          <i class="ri-shopping-bag-3-line navIcon" aria-hidden="true"></i>
+          <span class="label">商店</span>
+        </button>
+        <button class="settingsButton" type="button">
+          <i class="ri-settings-3-line navIcon" aria-hidden="true"></i>
+          <span class="label">设置</span>
+        </button>
+      </div>
+    </aside>
+
+    <button id="sidebarOverlay" class="sidebarOverlay" type="button" aria-label="关闭侧边栏"></button>
+
+    <section id="mainView" class="mainPane activeView" aria-label="主内容">
+      <header class="contentHeader">
+        <button class="mobileSidebarButton" type="button" aria-label="打开侧边栏" title="打开侧边栏">
+          <img class="mobileSidebarLogo" src="/favicon.ico" alt="" aria-hidden="true">
+        </button>
+        <div class="headerTitleBlock">
+          <h1>杰睿 JeriBot</h1>
+        </div>
+      </header>
+    </section>
+  </main>
+  <script src="/app.js"></script>
 </body>
 </html>

@@ -27,10 +27,17 @@ if ($choice -eq "2") {
 }
 
 function Die {
-    Write-Host "构建失败！"
+    Write-Host "构建失败！" -ForegroundColor Red
     Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"
     Read-Host
     exit 1
+}
+
+Write-Host "正在终止相关进程..."
+$procs = @(Get-Process -Name "JeriBot_x64","JeriBot_x86" -ErrorAction SilentlyContinue)
+if ($procs.Count -gt 0) {
+    $procs | Stop-Process -Force
+    Start-Sleep -Seconds 1
 }
 
 Write-Host "准备构建..."
@@ -63,7 +70,7 @@ Copy-Item "$INSTALL_DIR\JeriBot.exe" (Join-Path $DIST_ROOT $OUT_NAME) -ErrorActi
 Write-Host "清理缓存..."
 if (Test-Path $TEMP_ROOT) { Remove-Item -Recurse -Force $TEMP_ROOT -ErrorAction SilentlyContinue }
 
-Write-Host "程序输出到：$DIST_ROOT\$OUT_NAME"
-Write-Host "已完成构建，按回车退出"
+Write-Host "程序输出到：$DIST_ROOT\$OUT_NAME" -ForegroundColor Green
+Write-Host "按回车启动 JeriBot"
 Read-Host
-exit 0
+Start-Process (Join-Path $DIST_ROOT $OUT_NAME)

@@ -1,4 +1,5 @@
 #include "Server.h"
+#include "resource_ids.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -6,6 +7,7 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <shellapi.h>
 
 #include <sstream>
@@ -23,55 +25,52 @@ struct Server::Impl {
 
 namespace {
 
-std::string contentTypeFor(const std::string& path)
+struct ResourceEntry {
+    const char* urlPath;
+    int resourceId;
+    const char* contentType;
+};
+
+const ResourceEntry resourceMap[] = {
+    {"/",             RES_INDEX_HTML,      "text/html; charset=utf-8"},
+    {"/index.html",   RES_INDEX_HTML,      "text/html; charset=utf-8"},
+    {"/style.css",    RES_STYLE_CSS,       "text/css; charset=utf-8"},
+    {"/app.js",       RES_APP_JS,          "application/javascript; charset=utf-8"},
+    {"/remixicon.css", RES_REMIXICON_CSS,  "text/css; charset=utf-8"},
+    {"/remixicon.woff2", RES_REMIXICON_WOFF2, "font/woff2"},
+    {"/favicon.ico",  RES_FAVICON_ICO,     "image/x-icon"},
+};
+
+constexpr size_t resourceMapSize = sizeof(resourceMap) / sizeof(resourceMap[0]);
+
+std::string buildResponse(int code, const char* status,
+                          const char* ctype, const void* body, size_t bodySize)
 {
-    auto dot = path.rfind('.');
-    if (dot == std::string::npos) return "application/octet-stream";
-    std::string ext = path.substr(dot + 1);
-    if (ext == "html" || ext == "htm") return "text/html; charset=utf-8";
-    if (ext == "css") return "text/css; charset=utf-8";
-    if (ext == "js") return "application/javascript; charset=utf-8";
-    if (ext == "json") return "application/json; charset=utf-8";
-    if (ext == "png") return "image/png";
-    if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
-    if (ext == "gif") return "image/gif";
-    if (ext == "svg") return "image/svg+xml";
-    if (ext == "ico") return "image/x-icon";
-    if (ext == "woff") return "font/woff";
-    if (ext == "woff2") return "font/woff2";
-    if (ext == "ttf") return "font/ttf";
-    return "application/octet-stream";
+    std::string header;
+    header.reserve(256 + bodySize);
+    header += "HTTP/1.1 ";
+    header += std::to_string(code);
+    header += ' ';
+    header += status;
+    header += "\r\nContent-Type: ";
+    header += ctype;
+    header += "\r\nContent-Length: ";
+    header += std::to_string(bodySize);
+    header += "\r\nConnection: close\r\n\r\n";
+    header.append(static_cast<const char*>(body), bodySize);
+    return header;
 }
 
-std::string buildResponse(int code, const std::string& status,
-                          const std::string& ctype, const std::string& body)
+std::string buildTextResponse(int code, const char* status,
+                               const char* ctype, const std::string& text)
 {
-    std::ostringstream oss;
-    oss << "HTTP/1.1 " << code << " " << status << "\r\n"
-        << "Content-Type: " << ctype << "\r\n"
-        << "Content-Length: " << body.size() << "\r\n"
-        << "Connection: close\r\n"
-        << "\r\n"
-        << body;
-    return oss.str();
+    return buildResponse(code, status, ctype, text.c_str(), text.size());
 }
 
-std::wstring toWide(const std::string& narrow)
-{
-    if (narrow.empty()) return {};
-    int len = MultiByteToWideChar(CP_UTF8, 0, narrow.c_str(), -1, nullptr, 0);
-    if (len <= 0) return {};
-    std::wstring wide(static_cast<size_t>(len), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, narrow.c_str(), -1, &wide[0], len);
-    wide.pop_back();
-    return wide;
-}
-
-bool loadEmbeddedResource(const std::string& name, std::string& out)
+bool loadResource(int id, const void*& outPtr, size_t& outSize)
 {
     HMODULE hMod = GetModuleHandleW(nullptr);
-    std::wstring wideName = toWide(name);
-    HRSRC hRes = FindResourceW(hMod, wideName.c_str(), L"ASSETS");
+    HRSRC hRes = FindResourceW(hMod, MAKEINTRESOURCEW(id), RT_RCDATA);
     if (!hRes) return false;
 
     HGLOBAL hData = LoadResource(hMod, hRes);
@@ -83,7 +82,8 @@ bool loadEmbeddedResource(const std::string& name, std::string& out)
     void* ptr = LockResource(hData);
     if (!ptr) return false;
 
-    out.assign(static_cast<const char*>(ptr), size);
+    outPtr = ptr;
+    outSize = static_cast<size_t>(size);
     return true;
 }
 
@@ -94,25 +94,28 @@ std::string handleGet(const std::string& requestPath)
         if (c == '\\') c = '/';
     }
     if (path.find("..") != std::string::npos) {
-        return buildResponse(403, "Forbidden", "text/plain; charset=utf-8", "403 Forbidden");
-    }
-    while (!path.empty() && path.front() == '/') path.erase(path.begin());
-    if (path.empty()) path = "index.html";
-
-    std::string content;
-    if (!loadEmbeddedResource(path, content)) {
-        return buildResponse(404, "Not Found", "text/plain; charset=utf-8", "404 Not Found");
+        return buildTextResponse(403, "Forbidden", "text/plain; charset=utf-8", "403 Forbidden");
     }
 
-    std::string ctype = contentTypeFor(path);
-    return buildResponse(200, "OK", ctype, content);
+    for (size_t i = 0; i < resourceMapSize; ++i) {
+        if (path == resourceMap[i].urlPath) {
+            const void* data = nullptr;
+            size_t size = 0;
+            if (loadResource(resourceMap[i].resourceId, data, size)) {
+                return buildResponse(200, "OK", resourceMap[i].contentType, data, size);
+            }
+            break;
+        }
+    }
+
+    return buildTextResponse(404, "Not Found", "text/plain; charset=utf-8", "404 Not Found");
 }
 
 std::string processRequest(std::string_view data)
 {
     auto lf = data.find('\n');
     if (lf == std::string_view::npos) {
-        return buildResponse(400, "Bad Request", "text/plain; charset=utf-8", "400 Bad Request");
+        return buildTextResponse(400, "Bad Request", "text/plain; charset=utf-8", "400 Bad Request");
     }
 
     std::string line(data.substr(0, lf));
@@ -125,7 +128,7 @@ std::string processRequest(std::string_view data)
     }
 
     if (method != "GET") {
-        return buildResponse(405, "Method Not Allowed", "text/plain; charset=utf-8", "405 Method Not Allowed");
+        return buildTextResponse(405, "Method Not Allowed", "text/plain; charset=utf-8", "405 Method Not Allowed");
     }
 
     auto qpos = path.find('?');
