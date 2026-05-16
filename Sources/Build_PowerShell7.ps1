@@ -28,7 +28,7 @@ if ($choice -eq "2") {
 
 function Die {
     Write-Host "构建失败！" -ForegroundColor Red
-    Write-Host "缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"
+    Write-Host "可能缺少编译环境，请检查 CMake 环境变量、包含 MSVC 的 Visual Studio C++ 桌面开发环境是否存在！"
     Read-Host
     exit 1
 }

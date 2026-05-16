@@ -5,9 +5,11 @@
 
 namespace JeriBot {
 
+class ConversationManager;
+
 class Server {
 public:
-    Server(uint16_t port);
+    Server(uint16_t port, ConversationManager* conversationMgr);
     ~Server();
 
     bool start(std::string& error);

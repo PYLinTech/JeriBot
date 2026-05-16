@@ -1,4 +1,6 @@
 #include "Server.h"
+#include "Conversation/ConversationManager.h"
+#include "Json/Json.h"
 #include "resource_ids.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -21,6 +23,7 @@ struct Server::Impl {
     SOCKET listenSocket = INVALID_SOCKET;
     bool running = false;
     bool wsaInitialized = false;
+    ConversationManager* conversationMgr = nullptr;
 };
 
 namespace {
@@ -62,9 +65,19 @@ std::string buildResponse(int code, const char* status,
 }
 
 std::string buildTextResponse(int code, const char* status,
-                               const char* ctype, const std::string& text)
+                              const char* ctype, const std::string& text)
 {
     return buildResponse(code, status, ctype, text.c_str(), text.size());
+}
+
+std::string buildJsonResponse(int code, const char* status, const std::string& json)
+{
+    return buildTextResponse(code, status, "application/json; charset=utf-8", json);
+}
+
+std::string jsonError(const std::string& msg)
+{
+    return R"({"result":"error","message":")" + msg + R"("})";
 }
 
 bool loadResource(int id, const void*& outPtr, size_t& outSize)
@@ -111,40 +124,166 @@ std::string handleGet(const std::string& requestPath)
     return buildTextResponse(404, "Not Found", "text/plain; charset=utf-8", "404 Not Found");
 }
 
-std::string processRequest(std::string_view data)
+enum class HttpMethod { Get, Post, Other };
+
+struct ParsedRequest {
+    HttpMethod method;
+    std::string path;
+    std::string query;
+    std::string body;
+};
+
+ParsedRequest parseRequest(std::string_view data)
 {
+    ParsedRequest req;
     auto lf = data.find('\n');
     if (lf == std::string_view::npos) {
-        return buildTextResponse(400, "Bad Request", "text/plain; charset=utf-8", "400 Bad Request");
+        req.method = HttpMethod::Other;
+        return req;
     }
 
     std::string line(data.substr(0, lf));
     if (!line.empty() && line.back() == '\r') line.pop_back();
 
-    std::string method, path;
+    std::string methodStr;
     {
         std::istringstream iss(line);
-        iss >> method >> path;
+        iss >> methodStr >> req.path;
     }
 
-    if (method != "GET") {
-        return buildTextResponse(405, "Method Not Allowed", "text/plain; charset=utf-8", "405 Method Not Allowed");
+    if (methodStr == "GET") req.method = HttpMethod::Get;
+    else if (methodStr == "POST") req.method = HttpMethod::Post;
+    else req.method = HttpMethod::Other;
+
+    auto qpos = req.path.find('?');
+    if (qpos != std::string::npos) {
+        req.query = req.path.substr(qpos + 1);
+        req.path.resize(qpos);
     }
 
-    auto qpos = path.find('?');
-    if (qpos != std::string::npos) path.resize(qpos);
+    size_t headerEnd = data.find("\r\n\r\n");
+    if (headerEnd != std::string_view::npos) {
+        req.body = std::string(data.substr(headerEnd + 4));
+    }
 
-    return handleGet(path);
+    for (char& c : req.path) {
+        if (c == '\\') c = '/';
+    }
+
+    return req;
 }
 
-constexpr size_t RECV_BUF_SIZE = 8192;
+bool ensurePost(const ParsedRequest& req, std::string& out)
+{
+    if (req.method == HttpMethod::Post) return true;
+    out = buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持POST"})");
+    return false;
+}
+
+bool parseJsonBody(const ParsedRequest& req, Json& outBody, std::string& outResp)
+{
+    std::string err;
+    Json body = Json::parse(req.body, err);
+    if (!err.empty() || !body.isObject()) {
+        outResp = buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"请求体不是有效JSON"})");
+        return false;
+    }
+    outBody = std::move(body);
+    return true;
+}
+
+std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
+{
+    const std::string& path = req.path;
+
+    if (path == "/api/conversation/add-group") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("name") || !body["name"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少name字段"})");
+        }
+        const std::string& name = body["name"].asString();
+        if (name.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"分组名称不能为空"})");
+        }
+        std::string error;
+        if (mgr->addGroup(name, error)) {
+            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (path == "/api/conversation/rename-group") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("old_name") || !body["old_name"].isString() ||
+            !body.contains("new_name") || !body["new_name"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少old_name或new_name字段"})");
+        }
+        const std::string& oldName = body["old_name"].asString();
+        const std::string& newName = body["new_name"].asString();
+        if (oldName.empty() || newName.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"分组名称不能为空"})");
+        }
+        std::string error;
+        if (mgr->renameGroup(oldName, newName, error)) {
+            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (path == "/api/conversation/delete-group") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("name") || !body["name"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少name字段"})");
+        }
+        const std::string& name = body["name"].asString();
+        if (name.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"分组名称不能为空"})");
+        }
+        std::string error;
+        if (mgr->deleteGroup(name, error)) {
+            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (path == "/api/conversation/new") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        std::string group;
+        if (body.contains("group") && body["group"].isString()) {
+            group = body["group"].asString();
+        }
+        std::string outId;
+        std::string error;
+        std::string resolvedGroup = mgr->newConversation(std::move(group), outId, error);
+        if (!error.empty()) {
+            return buildJsonResponse(400, "Bad Request", jsonError(error));
+        }
+        std::string json = R"({"result":"success","group":")" + resolvedGroup + R"(","id":")" + outId + R"("})";
+        return buildJsonResponse(200, "OK", json);
+    }
+
+    return buildJsonResponse(404, "Not Found", R"({"result":"error","message":"未知的API路径"})");
+}
 
 } // namespace
 
-Server::Server(uint16_t port)
+Server::Server(uint16_t port, ConversationManager* conversationMgr)
     : p_(new Impl{})
 {
     p_->port = port;
+    p_->conversationMgr = conversationMgr;
 }
 
 Server::~Server()
@@ -212,11 +351,21 @@ void Server::run()
         SOCKET client = accept(p_->listenSocket, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
         if (client == INVALID_SOCKET) continue;
 
-        char buf[RECV_BUF_SIZE];
-        int received = recv(client, buf, static_cast<int>(sizeof(buf)) - 1, 0);
-        if (received > 0) {
-            buf[received] = '\0';
-            std::string response = processRequest(std::string_view(buf, static_cast<size_t>(received)));
+        std::string received;
+        received.resize(8192);
+        int len = recv(client, &received[0], static_cast<int>(received.size()) - 1, 0);
+        if (len > 0) {
+            received.resize(static_cast<size_t>(len));
+            ParsedRequest req = parseRequest(received);
+
+            std::string response;
+            if (req.path.compare(0, 5, "/api/") == 0) {
+                response = handleApi(req, p_->conversationMgr);
+            } else if (req.method == HttpMethod::Get) {
+                response = handleGet(req.path);
+            } else {
+                response = buildTextResponse(405, "Method Not Allowed", "text/plain; charset=utf-8", "405 Method Not Allowed");
+            }
             send(client, response.c_str(), static_cast<int>(response.size()), 0);
         }
 

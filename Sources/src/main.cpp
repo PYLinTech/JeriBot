@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include "Config/ConfigManager.h"
+#include "Conversation/ConversationManager.h"
 #include "Error/ErrorManager.h"
 #include "Server/Server.h"
 
@@ -33,7 +34,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     const JeriBot::Json& cfg = config.config();
     uint16_t port = static_cast<uint16_t>(cfg["Port"].asInt());
 
-    JeriBot::Server server(port);
+    JeriBot::ConversationManager conversation;
+    if (!conversation.initialize(config.configDir(), error)) {
+        JeriBot::showError("会话目录初始化失败：" + error);
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return 1;
+    }
+
+    JeriBot::Server server(port, &conversation);
     if (!server.start(error)) {
         JeriBot::showError("服务启动失败：" + error);
         ReleaseMutex(mutex);
