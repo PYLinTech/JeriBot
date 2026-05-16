@@ -311,6 +311,29 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         return buildJsonResponse(400, "Bad Request", jsonError(error));
     }
 
+    if (path == "/api/conversation/move") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("id") || !body["id"].isString() ||
+            !body.contains("old_group") || !body["old_group"].isString() ||
+            !body.contains("new_group") || !body["new_group"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少id、old_group或new_group字段"})");
+        }
+        const std::string& id = body["id"].asString();
+        const std::string& oldGroup = body["old_group"].asString();
+        const std::string& newGroup = body["new_group"].asString();
+        if (id.empty() || oldGroup.empty() || newGroup.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"id、old_group和new_group不能为空"})");
+        }
+        std::string error;
+        if (mgr->moveConversation(id, oldGroup, newGroup, error)) {
+            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
     if (path == "/api/conversation/list") {
         if (req.method != HttpMethod::Get) {
             return buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持GET"})");

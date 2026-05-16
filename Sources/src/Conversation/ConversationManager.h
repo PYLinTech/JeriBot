@@ -14,6 +14,7 @@ struct ConversationInfo {
 
 struct GroupInfo {
     std::string name;
+    long long folderTime = 0;
     std::vector<ConversationInfo> conversations;
 };
 
@@ -26,6 +27,7 @@ public:
     std::string newConversation(std::string group, std::string& outId, std::string& error);
     bool deleteConversation(const std::string& group, const std::string& id, std::string& error);
     bool renameConversation(const std::string& group, const std::string& id, const std::string& newName, std::string& error);
+    bool moveConversation(const std::string& id, const std::string& oldGroup, const std::string& newGroup, std::string& error);
     std::vector<GroupInfo> listGroups(std::string& error);
     const std::string& conversationDir() const;
     const std::string& groupsDir() const;

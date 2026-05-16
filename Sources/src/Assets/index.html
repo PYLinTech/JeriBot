@@ -18,15 +18,26 @@
         <span class="brandText">杰睿 JeriBot</span>
       </div>
       <nav class="sidebarBody" aria-label="导航">
-        <div id="chatList" class="chatList"></div>
+        <div class="sidebarActions">
+          <button class="actionButton" type="button"><i class="ri-add-large-line actionIcon" aria-hidden="true"></i><span class="actionLabel">新建会话</span></button>
+          <button class="actionButton actionNewGroup" type="button"><i class="ri-folder-add-line actionIcon" aria-hidden="true"></i><span class="actionLabel">新建分组</span></button>
+        </div>
+        <div id="chatList" class="chatList">
+          <div class="groupSection">
+            <div class="groupHeader">
+              <i class="ri-folder-line groupIcon" aria-hidden="true"></i>
+              <span class="groupName">默认分组</span>
+            </div>
+          </div>
+        </div>
       </nav>
       <div class="sidebarFoot">
-        <button class="navButton" type="button"><i class="ri-user-smile-line navIcon" aria-hidden="true"></i><span class="navLabel">人格</span></button>
-        <button class="navButton" type="button"><i class="ri-magic-line navIcon" aria-hidden="true"></i><span class="navLabel">技能</span></button>
-        <button class="navButton" type="button"><i class="ri-brain-line navIcon" aria-hidden="true"></i><span class="navLabel">记忆</span></button>
-        <button class="navButton" type="button"><i class="ri-tools-line navIcon" aria-hidden="true"></i><span class="navLabel">工具</span></button>
-        <button class="navButton" type="button"><i class="ri-shopping-bag-3-line navIcon" aria-hidden="true"></i><span class="navLabel">商店</span></button>
-        <button class="navButton" type="button"><i class="ri-settings-3-line navIcon" aria-hidden="true"></i><span class="navLabel">设置</span></button>
+        <button class="navButton" type="button" data-nav="personality"><i class="ri-user-smile-line navIcon" aria-hidden="true"></i><span class="navLabel">人格</span></button>
+        <button class="navButton" type="button" data-nav="skills"><i class="ri-magic-line navIcon" aria-hidden="true"></i><span class="navLabel">技能</span></button>
+        <button class="navButton" type="button" data-nav="memory"><i class="ri-brain-line navIcon" aria-hidden="true"></i><span class="navLabel">记忆</span></button>
+        <button class="navButton" type="button" data-nav="tools"><i class="ri-tools-line navIcon" aria-hidden="true"></i><span class="navLabel">工具</span></button>
+        <button class="navButton" type="button" data-nav="store"><i class="ri-shopping-bag-3-line navIcon" aria-hidden="true"></i><span class="navLabel">商店</span></button>
+        <button class="navButton" type="button" data-nav="settings"><i class="ri-settings-3-line navIcon" aria-hidden="true"></i><span class="navLabel">设置</span></button>
       </div>
     </aside>
     <div id="overlay" class="overlay"></div>

@@ -2,6 +2,7 @@
 #include "Json/Json.h"
 
 #include <chrono>
+#include <algorithm>
 #include <fstream>
 
 namespace JeriBot {
@@ -192,6 +193,42 @@ bool ConversationManager::renameConversation(const std::string& group, const std
     return writeFile(filePath, doc.dump(2), error);
 }
 
+bool ConversationManager::moveConversation(const std::string& id, const std::string& oldGroup, const std::string& newGroup, std::string& error)
+{
+    if (oldGroup == newGroup) {
+        error = "原分组与目标分组相同";
+        return false;
+    }
+
+    std::filesystem::path oldPath = convFilePath(oldGroup, id);
+    std::error_code ec;
+    if (!std::filesystem::exists(oldPath, ec)) {
+        error = "会话不存在";
+        return false;
+    }
+
+    std::filesystem::path basePath = std::filesystem::u8path(groupsDir_);
+    std::filesystem::path newGroupPath = basePath / std::filesystem::u8path(newGroup);
+    if (!std::filesystem::is_directory(newGroupPath, ec)) {
+        error = "目标分组不存在";
+        return false;
+    }
+
+    std::filesystem::path newPath = basePath / std::filesystem::u8path(newGroup) / (id + ".json");
+    if (std::filesystem::exists(newPath, ec)) {
+        error = "目标分组中已存在同名会话";
+        return false;
+    }
+
+    std::filesystem::rename(oldPath, newPath, ec);
+    if (ec) {
+        error = "移动会话失败：" + ec.message();
+        return false;
+    }
+
+    return true;
+}
+
 std::string ConversationManager::newConversation(std::string group, std::string& outId, std::string& error)
 {
     if (group.empty()) group = "Default";
@@ -241,6 +278,17 @@ std::vector<GroupInfo> ConversationManager::listGroups(std::string& error)
         auto u8Name = entry.path().filename().u8string();
         group.name = {u8Name.begin(), u8Name.end()};
 
+        std::error_code ecDir;
+        auto ftime = std::filesystem::last_write_time(entry.path(), ecDir);
+        if (!ecDir) {
+            auto sst = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                ftime - std::filesystem::file_time_type::clock::now()
+                + std::chrono::system_clock::now());
+            group.folderTime = static_cast<long long>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    sst.time_since_epoch()).count());
+        }
+
         std::error_code ec2;
         for (const auto& file : std::filesystem::directory_iterator(entry.path(), ec2)) {
             if (!file.is_regular_file()) continue;
@@ -263,8 +311,18 @@ std::vector<GroupInfo> ConversationManager::listGroups(std::string& error)
             group.conversations.push_back(std::move(conv));
         }
 
+        std::sort(group.conversations.begin(), group.conversations.end(),
+            [](const ConversationInfo& a, const ConversationInfo& b) {
+                return a.updateTime > b.updateTime;
+            });
+
         result.push_back(std::move(group));
     }
+
+    std::sort(result.begin(), result.end(),
+        [](const GroupInfo& a, const GroupInfo& b) {
+            return a.folderTime > b.folderTime;
+        });
 
     return result;
 }
