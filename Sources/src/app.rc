@@ -4,6 +4,9 @@
 // 应用程序图标
 MAINICON ICON "../JeriBot_Icon.ico"
 
+// 嵌入静态资源
+index.html ASSETS "Assets/index.html"
+
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 26,5,16,0
  PRODUCTVERSION 26,5,16,0

@@ -14,6 +14,7 @@ static Json defaultConfig()
     cfg["Base_URL"] = "https://api.deepseek.com";
     cfg["API_Key"] = "env:JERIBOT_API_KEY";
     cfg["Model_ID"] = "deepseek-v4-flash";
+    cfg["Port"] = 11111;
     return cfg;
 }
 

@@ -26,7 +26,9 @@ target_compile_definitions(JeriBot PRIVATE
 )
 
 target_link_libraries(JeriBot PRIVATE
+    shell32
     user32
+    ws2_32
 )
 
 install(TARGETS JeriBot
