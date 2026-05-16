@@ -26,9 +26,6 @@ target_compile_definitions(JeriBot PRIVATE
 )
 
 target_link_libraries(JeriBot PRIVATE
-    ole32
-    oleaut32
-    uiautomationcore
     user32
 )
 
