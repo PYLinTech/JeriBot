@@ -16,6 +16,9 @@ static Json defaultConfig()
     llm["Base_URL"] = "https://api.deepseek.com";
     llm["API_Key"] = "env:JERIBOT_API_KEY";
     llm["Model_ID"] = "deepseek-v4-flash";
+    llm["Max_Tokens"] = 4096;
+    llm["Temperature"] = 0.7;
+    llm["Top_P"] = 1.0;
     cfg["LLM"] = std::move(llm);
     return cfg;
 }

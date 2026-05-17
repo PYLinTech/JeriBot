@@ -46,8 +46,11 @@ public:
     double asNumber() const;
     int asInt() const;
     const std::string& asString() const;
+    std::string& asString();
     const Array& asArray() const;
+    Array& asArray();
     const Object& asObject() const;
+    Object& asObject();
 
     Json& operator[](const std::string& key);
     const Json& operator[](const std::string& key) const;

@@ -136,6 +136,21 @@ const Json::Object& Json::asObject() const
     return object_;
 }
 
+std::string& Json::asString()
+{
+    return string_;
+}
+
+Json::Array& Json::asArray()
+{
+    return array_;
+}
+
+Json::Object& Json::asObject()
+{
+    return object_;
+}
+
 Json& Json::operator[](const std::string& key)
 {
     if (type_ == Type::Null) {

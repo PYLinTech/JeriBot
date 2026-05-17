@@ -28,6 +28,7 @@ target_compile_definitions(JeriBot PRIVATE
 target_link_libraries(JeriBot PRIVATE
     shell32
     user32
+    winhttp
     ws2_32
 )
 
