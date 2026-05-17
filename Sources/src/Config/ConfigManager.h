@@ -19,6 +19,7 @@ private:
 
     bool loadConfig(std::string& error);
     bool saveDefaultConfig(std::string& error);
+    void resolveEnvVars();
 };
 
 } // namespace JeriBot
