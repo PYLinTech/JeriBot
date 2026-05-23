@@ -49,6 +49,70 @@
         <h1>杰睿 JeriBot</h1>
       </header>
     </section>
+    <section id="storeView" class="mainPane storePane">
+      <header class="mainHeader storeHeader">
+        <button class="mobileMenuBtn" type="button" aria-label="打开侧边栏" title="打开侧边栏">
+          <img class="mobileMenuLogo" src="/favicon.ico" alt="" aria-hidden="true">
+        </button>
+        <div class="storeTitleBlock">
+          <h1>商店</h1>
+        </div>
+        <div class="storeHeaderActions">
+          <div id="storeSourcePicker" class="storeSourcePicker">
+            <button id="storeSourceButton" class="storeSourceButton" type="button" aria-haspopup="listbox" aria-expanded="false">
+              <span id="storeSourceButtonText">国内源</span>
+              <i class="ri-arrow-down-s-line" aria-hidden="true"></i>
+            </button>
+            <div id="storeSourceMenu" class="storeSourceMenu hidden" role="listbox"></div>
+          </div>
+          <button id="storeEditCustomSourceBtn" class="storeIconButton hidden" type="button" title="编辑自定义源" aria-label="编辑自定义源"><i class="ri-edit-line" aria-hidden="true"></i></button>
+        </div>
+      </header>
+      <div class="storeShell">
+        <div class="storeTopbar">
+          <div class="storeTabs" role="tablist" aria-label="商店分类">
+            <button class="storeTab active" type="button" data-store-cat="personality"><i class="ri-user-smile-line" aria-hidden="true"></i><span>人格</span></button>
+            <button class="storeTab" type="button" data-store-cat="skill"><i class="ri-magic-line" aria-hidden="true"></i><span>技能</span></button>
+            <button class="storeTab" type="button" data-store-cat="memory"><i class="ri-brain-line" aria-hidden="true"></i><span>记忆</span></button>
+            <button class="storeTab" type="button" data-store-cat="tool"><i class="ri-tools-line" aria-hidden="true"></i><span>工具</span></button>
+            <button class="storeTab" type="button" data-store-cat="local"><i class="ri-archive-line" aria-hidden="true"></i><span>本地</span></button>
+          </div>
+          <div class="storeSearchBox">
+            <i class="ri-search-line" aria-hidden="true"></i>
+            <input id="storeSearchInput" type="search" placeholder="搜索名称、作者或 ID" autocomplete="off">
+          </div>
+        </div>
+        <p id="storeMessage" class="storeMessage" role="status"></p>
+        <div id="storeRemotePane" class="storeRemotePane">
+          <div id="storeStats" class="storeStats"></div>
+          <div id="storeItemList" class="storeGrid"></div>
+        </div>
+        <div id="storeLocalPane" class="storeLocalPane hidden">
+          <input id="storeZipInput" type="file" accept=".zip,application/zip" hidden>
+          <button id="storeZipDropZone" class="storeDropZone" type="button">
+            <i class="ri-upload-cloud-2-line" aria-hidden="true"></i>
+            <strong>选择或拖入安装包</strong>
+          </button>
+          <article id="storeLocalPackCard" class="storeLocalPreview hidden">
+            <div class="storeLocalPreviewHead">
+              <div class="storeLocalPreviewTitle">
+                <img id="storeLocalPackIcon" class="storePackageImage hidden" alt="">
+                <strong id="storeLocalPackName">-</strong>
+                <span id="storeLocalPackFile">-</span>
+              </div>
+              <span id="storeLocalPackVersion" class="storeBadge">v-</span>
+            </div>
+            <div class="storeLocalPreviewMeta">
+              <span><b>类型</b><em id="storeLocalPackType">-</em></span>
+              <span><b>ID</b><em id="storeLocalPackId">-</em></span>
+              <span><b>上传者</b><em id="storeLocalPackUploader">-</em></span>
+            </div>
+            <p id="storeLocalPackDesc">暂时没有说明</p>
+            <button id="installLocalPackBtn" class="storePrimaryButton" type="button" disabled><i class="ri-download-cloud-2-line" aria-hidden="true"></i><span>安装本地包</span></button>
+          </article>
+        </div>
+      </div>
+    </section>
   </main>
   <script src="/app.js"></script>
 </body>

@@ -11,6 +11,8 @@ public:
     const std::string& configDir() const;
     std::string configFilePath() const;
     const Json& config() const;
+    bool save(std::string& error);
+    Json& mutableConfig();
 
 private:
     std::string configDir_;
@@ -19,6 +21,7 @@ private:
 
     bool loadConfig(std::string& error);
     bool saveDefaultConfig(std::string& error);
+    bool ensureStoreConfig(std::string& error);
     void resolveEnvVars();
 };
 

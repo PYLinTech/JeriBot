@@ -14,6 +14,20 @@
 
 namespace JeriBot {
 
+namespace {
+
+std::wstring utf8ToWide(const std::string& value)
+{
+    int len = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring wide(static_cast<size_t>(len), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, wide.data(), len) <= 0) return {};
+    if (!wide.empty() && wide.back() == L'\0') wide.pop_back();
+    return wide;
+}
+
+} // namespace
+
 bool HttpClient::parseUrl(const std::string& url,
                           std::wstring& host,
                           uint16_t& port,
@@ -72,14 +86,12 @@ bool HttpClient::parseUrl(const std::string& url,
         return false;
     }
 
-    // Convert to wide strings
-    int hostLen = MultiByteToWideChar(CP_UTF8, 0, hostPart.c_str(), -1, nullptr, 0);
-    host.resize(static_cast<size_t>(hostLen - 1));
-    MultiByteToWideChar(CP_UTF8, 0, hostPart.c_str(), -1, &host[0], hostLen);
-
-    int pathLen = MultiByteToWideChar(CP_UTF8, 0, pathPart.c_str(), -1, nullptr, 0);
-    path.resize(static_cast<size_t>(pathLen - 1));
-    MultiByteToWideChar(CP_UTF8, 0, pathPart.c_str(), -1, &path[0], pathLen);
+    host = utf8ToWide(hostPart);
+    path = utf8ToWide(pathPart);
+    if (host.empty() || path.empty()) {
+        error = "URL 编码无效";
+        return false;
+    }
 
     return true;
 }
@@ -88,23 +100,20 @@ static std::wstring buildHeadersString(const std::vector<HttpClient::Header>& he
 {
     std::wstring result;
     for (const auto& h : headers) {
-        int nameLen = MultiByteToWideChar(CP_UTF8, 0, h.name.c_str(), -1, nullptr, 0);
-        std::wstring wname(static_cast<size_t>(nameLen - 1), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, h.name.c_str(), -1, &wname[0], nameLen);
-
-        int valLen = MultiByteToWideChar(CP_UTF8, 0, h.value.c_str(), -1, nullptr, 0);
-        std::wstring wval(static_cast<size_t>(valLen - 1), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, h.value.c_str(), -1, &wval[0], valLen);
+        std::wstring wname = utf8ToWide(h.name);
+        std::wstring wval = utf8ToWide(h.value);
+        if (wname.empty()) continue;
 
         result += wname + L": " + wval + L"\r\n";
     }
     return result;
 }
 
-HttpClient::Response HttpClient::post(const std::string& url,
-                                       const std::string& body,
-                                       const std::vector<Header>& headers,
-                                       std::string& error)
+HttpClient::Response HttpClient::sendRequest(const wchar_t* method,
+                                               const std::string& url,
+                                               const std::string* body,
+                                               const std::vector<Header>& headers,
+                                               std::string& error)
 {
     Response resp;
 
@@ -130,7 +139,7 @@ HttpClient::Response HttpClient::post(const std::string& url,
     }
 
     DWORD flags = secure ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(),
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, method, path.c_str(),
                                              nullptr, WINHTTP_NO_REFERER,
                                              WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
@@ -141,12 +150,12 @@ HttpClient::Response HttpClient::post(const std::string& url,
     }
 
     std::wstring wideHeaders = buildHeadersString(headers);
+    LPVOID bodyPtr = body ? const_cast<char*>(body->data()) : nullptr;
+    DWORD bodyLen = body ? static_cast<DWORD>(body->size()) : 0;
     BOOL ok = WinHttpSendRequest(hRequest,
                                   wideHeaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : wideHeaders.c_str(),
                                   static_cast<DWORD>(wideHeaders.size()),
-                                  const_cast<char*>(body.data()),
-                                  static_cast<DWORD>(body.size()),
-                                  static_cast<DWORD>(body.size()), 0);
+                                  bodyPtr, bodyLen, bodyLen, 0);
     if (!ok) {
         error = "WinHttpSendRequest 失败";
         WinHttpCloseHandle(hRequest);
@@ -164,7 +173,6 @@ HttpClient::Response HttpClient::post(const std::string& url,
         return resp;
     }
 
-    // Read status code
     DWORD statusCode = 0;
     DWORD statusCodeSize = sizeof(statusCode);
     WinHttpQueryHeaders(hRequest,
@@ -173,7 +181,6 @@ HttpClient::Response HttpClient::post(const std::string& url,
                          &statusCode, &statusCodeSize, WINHTTP_NO_HEADER_INDEX);
     resp.statusCode = static_cast<int>(statusCode);
 
-    // Read body
     DWORD bytesAvailable = 0;
     while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0) {
         std::string chunk(static_cast<size_t>(bytesAvailable), '\0');
@@ -190,6 +197,21 @@ HttpClient::Response HttpClient::post(const std::string& url,
     WinHttpCloseHandle(hSession);
 
     return resp;
+}
+
+HttpClient::Response HttpClient::get(const std::string& url,
+                                       const std::vector<Header>& headers,
+                                       std::string& error)
+{
+    return sendRequest(L"GET", url, nullptr, headers, error);
+}
+
+HttpClient::Response HttpClient::post(const std::string& url,
+                                       const std::string& body,
+                                       const std::vector<Header>& headers,
+                                       std::string& error)
+{
+    return sendRequest(L"POST", url, &body, headers, error);
 }
 
 bool HttpClient::postStream(const std::string& url,

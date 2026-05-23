@@ -19,6 +19,11 @@ public:
         std::string body;
     };
 
+    // Non-streaming GET: retrieve a resource, return full response.
+    Response get(const std::string& url,
+                 const std::vector<Header>& headers,
+                 std::string& error);
+
     // Non-streaming POST: send JSON body, return full response.
     Response post(const std::string& url,
                   const std::string& body,
@@ -40,6 +45,12 @@ private:
                   std::wstring& path,
                   bool& secure,
                   std::string& error);
+
+    Response sendRequest(const wchar_t* method,
+                         const std::string& url,
+                         const std::string* body,
+                         const std::vector<Header>& headers,
+                         std::string& error);
 };
 
 } // namespace JeriBot

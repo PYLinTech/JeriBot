@@ -1,6 +1,7 @@
 ﻿#include "Server.h"
 #include "Conversation/ConversationManager.h"
 #include "Json/Json.h"
+#include "Store/StoreManager.h"
 #include "resource_ids.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -12,9 +13,11 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <cctype>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace JeriBot {
 
@@ -24,6 +27,7 @@ struct Server::Impl {
     bool running = false;
     bool wsaInitialized = false;
     ConversationManager* conversationMgr = nullptr;
+    StoreManager* storeMgr = nullptr;
 };
 
 namespace {
@@ -77,7 +81,17 @@ std::string buildJsonResponse(int code, const char* status, const std::string& j
 
 std::string jsonError(const std::string& msg)
 {
-    return R"({"result":"error","message":")" + msg + R"("})";
+    Json err = Json::Object{};
+    err["result"] = "error";
+    err["message"] = msg;
+    return err.dump();
+}
+
+std::string jsonSuccess()
+{
+    Json result = Json::Object{};
+    result["result"] = "success";
+    return result.dump();
 }
 
 bool loadResource(int id, const void*& outPtr, size_t& outSize)
@@ -130,6 +144,7 @@ struct ParsedRequest {
     HttpMethod method;
     std::string path;
     std::string body;
+    size_t contentLength = 0;
 };
 
 ParsedRequest parseRequest(std::string_view data)
@@ -160,6 +175,22 @@ ParsedRequest parseRequest(std::string_view data)
 
     size_t headerEnd = data.find("\r\n\r\n");
     if (headerEnd != std::string_view::npos) {
+        std::string_view headers = data.substr(0, headerEnd);
+        std::string_view headersStr(headers.data(), headers.size());
+        std::string lowerHeaders;
+        lowerHeaders.reserve(headersStr.size());
+        for (char c : headersStr) lowerHeaders += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        size_t clPos = lowerHeaders.find("content-length:");
+        if (clPos != std::string::npos) {
+            size_t valStart = clPos + 15;
+            while (valStart < lowerHeaders.size() && lowerHeaders[valStart] == ' ') ++valStart;
+            size_t valEnd = lowerHeaders.find('\r', valStart);
+            if (valEnd == std::string::npos) valEnd = lowerHeaders.size();
+            std::string clStr(headersStr.substr(valStart, valEnd - valStart));
+            try { req.contentLength = static_cast<size_t>(std::stoull(clStr)); } catch (...) {}
+        }
+
         req.body = std::string(data.substr(headerEnd + 4));
     }
 
@@ -185,6 +216,257 @@ bool parseJsonBody(const ParsedRequest& req, Json& outBody, std::string& outResp
     return true;
 }
 
+std::string getPathWithoutQuery(const std::string& fullPath)
+{
+    auto pos = fullPath.find('?');
+    if (pos != std::string::npos) return fullPath.substr(0, pos);
+    return fullPath;
+}
+
+std::string getQueryParam(const std::string& fullPath, const std::string& key)
+{
+    auto qp = fullPath.find('?');
+    if (qp == std::string::npos) return {};
+    std::string query = fullPath.substr(qp + 1);
+    size_t start = 0;
+    while (start <= query.size()) {
+        size_t end = query.find('&', start);
+        std::string part = query.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        size_t eq = part.find('=');
+        std::string name = eq == std::string::npos ? part : part.substr(0, eq);
+        if (name == key) return eq == std::string::npos ? std::string{} : part.substr(eq + 1);
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return {};
+}
+
+std::string urlDecode(std::string value)
+{
+    auto hexValue = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    std::string decoded;
+    decoded.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '%' && i + 2 < value.size()) {
+            int hi = hexValue(value[i + 1]);
+            int lo = hexValue(value[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                decoded.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+            } else {
+                decoded.push_back(value[i]);
+            }
+        } else if (value[i] == '+') {
+            decoded.push_back(' ');
+        } else {
+            decoded.push_back(value[i]);
+        }
+    }
+    return decoded;
+}
+
+bool parseStoreBody(const ParsedRequest& req, Json& body,
+                    std::string& type, std::string& id, std::string& resp)
+{
+    if (!ensurePost(req, resp)) return false;
+    if (!parseJsonBody(req, body, resp)) return false;
+    if (!body.contains("type") || !body["type"].isString() ||
+        !body.contains("id") || !body["id"].isString()) {
+        resp = buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少type或id字段"})");
+        return false;
+    }
+    type = body["type"].asString();
+    id = body["id"].asString();
+    if (type.empty() || id.empty()) {
+        resp = buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"type和id不能为空"})");
+        return false;
+    }
+    return true;
+}
+
+std::string handleStoreApi(const ParsedRequest& req, StoreManager* store)
+{
+    if (!store) {
+        return buildJsonResponse(503, "Service Unavailable", R"({"result":"error","message":"商店暂不可用"})");
+    }
+
+    std::string basePath = getPathWithoutQuery(req.path);
+
+    if (basePath == "/api/store/list") {
+        if (req.method != HttpMethod::Get) {
+            return buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持GET"})");
+        }
+        std::string type = getQueryParam(req.path, "type");
+        if (type.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少type参数"})");
+        }
+        std::string error;
+        std::string listJson = store->fetchList(type, error);
+        if (!error.empty()) {
+            return buildJsonResponse(400, "Bad Request", jsonError(error));
+        }
+        return buildJsonResponse(200, "OK", listJson);
+    }
+
+    if (basePath == "/api/store/remote") {
+        std::string resp, type, id;
+        Json body;
+        if (!parseStoreBody(req, body, type, id, resp)) return resp;
+        std::string error;
+        if (store->installFromRemote(type, id, error)) {
+            return buildJsonResponse(200, "OK", jsonSuccess());
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (basePath == "/api/store/local") {
+        if (req.method != HttpMethod::Post) {
+            return buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持POST"})");
+        }
+        static const size_t maxUploadSize = 300 * 1024 * 1024;
+        if (req.body.size() > maxUploadSize) {
+            return buildJsonResponse(413, "Payload Too Large", R"({"result":"error","message":"上传文件过大，最大300MB"})");
+        }
+        std::string tempId;
+        std::string error;
+        std::string previewJson = store->previewLocalZipData(req.body, tempId, error);
+        if (!error.empty()) {
+            return buildJsonResponse(400, "Bad Request", jsonError(error));
+        }
+        return buildJsonResponse(200, "OK", previewJson);
+    }
+
+    if (basePath == "/api/store/install") {
+        std::string resp, type, id;
+        Json body;
+        if (!parseStoreBody(req, body, type, id, resp)) return resp;
+        std::string tempId;
+        if (body.contains("temp_id") && body["temp_id"].isString()) {
+            tempId = body["temp_id"].asString();
+        }
+        if (tempId.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少临时安装包"})");
+        }
+        std::string error;
+        if (store->installFromLocal(type, id, tempId, error)) {
+            return buildJsonResponse(200, "OK", jsonSuccess());
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (basePath == "/api/store/uninstall") {
+        std::string resp, type, id;
+        Json body;
+        if (!parseStoreBody(req, body, type, id, resp)) return resp;
+        std::string error;
+        if (store->uninstall(type, id, error)) {
+            return buildJsonResponse(200, "OK", jsonSuccess());
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (basePath == "/api/store/installed") {
+        if (req.method != HttpMethod::Get) {
+            return buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持GET"})");
+        }
+        std::string type = getQueryParam(req.path, "type");
+        if (type.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少type参数"})");
+        }
+        std::string error;
+        std::string installedJson = store->getInstalled(type, error);
+        if (!error.empty()) {
+            return buildJsonResponse(400, "Bad Request", jsonError(error));
+        }
+        return buildJsonResponse(200, "OK", installedJson);
+    }
+
+    if (basePath == "/api/store/source") {
+        if (req.method != HttpMethod::Get) {
+            return buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持GET"})");
+        }
+        Json result = Json::Object{};
+        result["result"] = "success";
+        result["current"] = store->getCurrentSource();
+        result["url"] = store->getSourceUrl();
+        result["raw_url"] = store->getSourceRawUrl(store->getCurrentSource());
+        Json sources = store->getSourcesList();
+        result["sources"] = std::move(sources);
+        return buildJsonResponse(200, "OK", result.dump(2));
+    }
+
+    if (basePath == "/api/store/icon") {
+        if (req.method != HttpMethod::Get) {
+            return buildJsonResponse(405, "Method Not Allowed", R"({"result":"error","message":"仅支持GET"})");
+        }
+
+        std::vector<unsigned char> iconData;
+        std::string error;
+        std::string tempId = urlDecode(getQueryParam(req.path, "temp_id"));
+        if (!tempId.empty()) {
+            if (store->getLocalZipIcon(tempId, iconData, error) && !iconData.empty()) {
+                return buildResponse(200, "OK", "image/x-icon", iconData.data(), iconData.size());
+            }
+            return buildTextResponse(404, "Not Found", "text/plain; charset=utf-8", "404 Not Found");
+        }
+
+        std::string type = urlDecode(getQueryParam(req.path, "type"));
+        std::string id = urlDecode(getQueryParam(req.path, "id"));
+        if (type.empty() || id.empty()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少type或id参数"})");
+        }
+        if (getQueryParam(req.path, "remote") == "1") {
+            if (store->getRemoteIcon(type, id, iconData, error) && !iconData.empty()) {
+                return buildResponse(200, "OK", "image/x-icon", iconData.data(), iconData.size());
+            }
+            return buildTextResponse(404, "Not Found", "text/plain; charset=utf-8", "404 Not Found");
+        }
+        if (store->getInstalledIcon(type, id, iconData, error) && !iconData.empty()) {
+            return buildResponse(200, "OK", "image/x-icon", iconData.data(), iconData.size());
+        }
+        return buildTextResponse(404, "Not Found", "text/plain; charset=utf-8", "404 Not Found");
+    }
+
+    if (basePath == "/api/store/switch-source") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("source") || !body["source"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少source字段"})");
+        }
+        const std::string& source = body["source"].asString();
+        std::string error;
+        if (store->setSource(source, error)) {
+            return buildJsonResponse(200, "OK", jsonSuccess());
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    if (basePath == "/api/store/custom-source") {
+        std::string resp;
+        if (!ensurePost(req, resp)) return resp;
+        Json body;
+        if (!parseJsonBody(req, body, resp)) return resp;
+        if (!body.contains("url") || !body["url"].isString()) {
+            return buildJsonResponse(400, "Bad Request", R"({"result":"error","message":"缺少url字段"})");
+        }
+        const std::string& url = body["url"].asString();
+        std::string error;
+        if (store->setCustomSourceUrl(url, error)) {
+            return buildJsonResponse(200, "OK", jsonSuccess());
+        }
+        return buildJsonResponse(400, "Bad Request", jsonError(error));
+    }
+
+    return buildJsonResponse(404, "Not Found", R"({"result":"error","message":"商店接口不存在"})");
+}
+
 std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
 {
     const std::string& path = req.path;
@@ -203,7 +485,7 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         }
         std::string error;
         if (mgr->addGroup(name, error)) {
-            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+            return buildJsonResponse(200, "OK", jsonSuccess());
         }
         return buildJsonResponse(400, "Bad Request", jsonError(error));
     }
@@ -224,7 +506,7 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         }
         std::string error;
         if (mgr->renameGroup(oldName, newName, error)) {
-            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+            return buildJsonResponse(200, "OK", jsonSuccess());
         }
         return buildJsonResponse(400, "Bad Request", jsonError(error));
     }
@@ -243,7 +525,7 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         }
         std::string error;
         if (mgr->deleteGroup(name, error)) {
-            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+            return buildJsonResponse(200, "OK", jsonSuccess());
         }
         return buildJsonResponse(400, "Bad Request", jsonError(error));
     }
@@ -263,8 +545,11 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         if (!error.empty()) {
             return buildJsonResponse(400, "Bad Request", jsonError(error));
         }
-        std::string json = R"({"result":"success","group":")" + resolvedGroup + R"(","id":")" + outId + R"("})";
-        return buildJsonResponse(200, "OK", json);
+        Json result = Json::Object{};
+        result["result"] = "success";
+        result["group"] = resolvedGroup;
+        result["id"] = outId;
+        return buildJsonResponse(200, "OK", result.dump());
     }
 
     if (path == "/api/conversation/delete") {
@@ -283,7 +568,7 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         }
         std::string error;
         if (mgr->deleteConversation(group, id, error)) {
-            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+            return buildJsonResponse(200, "OK", jsonSuccess());
         }
         return buildJsonResponse(400, "Bad Request", jsonError(error));
     }
@@ -306,7 +591,7 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         }
         std::string error;
         if (mgr->renameConversation(group, id, name, error)) {
-            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+            return buildJsonResponse(200, "OK", jsonSuccess());
         }
         return buildJsonResponse(400, "Bad Request", jsonError(error));
     }
@@ -329,7 +614,7 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         }
         std::string error;
         if (mgr->moveConversation(id, oldGroup, newGroup, error)) {
-            return buildJsonResponse(200, "OK", R"({"result":"success"})");
+            return buildJsonResponse(200, "OK", jsonSuccess());
         }
         return buildJsonResponse(400, "Bad Request", jsonError(error));
     }
@@ -343,20 +628,25 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
         if (!error.empty()) {
             return buildJsonResponse(400, "Bad Request", jsonError(error));
         }
-        std::string json = R"({"result":"success","data":[)";
+        Json result = Json::Object{};
+        result["result"] = "success";
+        result["data"] = Json::Array{};
         for (size_t i = 0; i < groups.size(); ++i) {
             const auto& g = groups[i];
-            if (i > 0) json += ",";
-            json += R"({"group":")" + g.name + R"(","conversations":[)";
+            Json group = Json::Object{};
+            group["group"] = g.name;
+            group["conversations"] = Json::Array{};
             for (size_t j = 0; j < g.conversations.size(); ++j) {
                 const auto& c = g.conversations[j];
-                if (j > 0) json += ",";
-                json += R"({"id":")" + c.id + R"(","name":")" + c.name + R"(","updateTime":)" + std::to_string(c.updateTime) + "}";
+                Json conv = Json::Object{};
+                conv["id"] = c.id;
+                conv["name"] = c.name;
+                conv["updateTime"] = static_cast<double>(c.updateTime);
+                group["conversations"].asArray().push_back(std::move(conv));
             }
-            json += "]}";
+            result["data"].asArray().push_back(std::move(group));
         }
-        json += "]}";
-        return buildJsonResponse(200, "OK", json);
+        return buildJsonResponse(200, "OK", result.dump());
     }
 
     return buildJsonResponse(404, "Not Found", R"({"result":"error","message":"未知的API路径"})");
@@ -364,11 +654,12 @@ std::string handleApi(const ParsedRequest& req, ConversationManager* mgr)
 
 } // namespace
 
-Server::Server(uint16_t port, ConversationManager* conversationMgr)
+Server::Server(uint16_t port, ConversationManager* conversationMgr, StoreManager* storeMgr)
     : p_(new Impl{})
 {
     p_->port = port;
     p_->conversationMgr = conversationMgr;
+    p_->storeMgr = storeMgr;
 }
 
 Server::~Server()
@@ -437,22 +728,51 @@ void Server::run()
         if (client == INVALID_SOCKET) continue;
 
         std::string received;
-        received.resize(8192);
+        received.resize(65536);
         int len = recv(client, &received[0], static_cast<int>(received.size()) - 1, 0);
-        if (len > 0) {
-            received.resize(static_cast<size_t>(len));
-            ParsedRequest req = parseRequest(received);
-
-            std::string response;
-            if (req.path.compare(0, 5, "/api/") == 0) {
-                response = handleApi(req, p_->conversationMgr);
-            } else if (req.method == HttpMethod::Get) {
-                response = handleGet(req.path);
-            } else {
-                response = buildTextResponse(405, "Method Not Allowed", "text/plain; charset=utf-8", "405 Method Not Allowed");
-            }
-            send(client, response.c_str(), static_cast<int>(response.size()), 0);
+        if (len <= 0) {
+            closesocket(client);
+            continue;
         }
+        received.resize(static_cast<size_t>(len));
+
+        ParsedRequest req = parseRequest(received);
+
+        if (req.contentLength > 0 && req.body.size() < req.contentLength) {
+            static const size_t maxBodySize = 300 * 1024 * 1024;
+            if (req.contentLength > maxBodySize) {
+                std::string resp = buildTextResponse(413, "Payload Too Large", "text/plain; charset=utf-8", "413 Payload Too Large");
+                send(client, resp.c_str(), static_cast<int>(resp.size()), 0);
+                closesocket(client);
+                continue;
+            }
+            size_t remaining = req.contentLength - req.body.size();
+            req.body.resize(req.contentLength);
+            size_t offset = req.body.size() - remaining;
+            while (offset < req.contentLength) {
+                int r = recv(client, &req.body[offset], static_cast<int>(req.contentLength - offset), 0);
+                if (r <= 0) break;
+                offset += static_cast<size_t>(r);
+            }
+            if (offset != req.contentLength) {
+                std::string resp = buildTextResponse(400, "Bad Request", "text/plain; charset=utf-8", "400 Bad Request");
+                send(client, resp.c_str(), static_cast<int>(resp.size()), 0);
+                closesocket(client);
+                continue;
+            }
+        }
+
+        std::string response;
+        if (req.path.rfind("/api/store/", 0) == 0) {
+            response = handleStoreApi(req, p_->storeMgr);
+        } else if (req.path.compare(0, 5, "/api/") == 0) {
+            response = handleApi(req, p_->conversationMgr);
+        } else if (req.method == HttpMethod::Get) {
+            response = handleGet(req.path);
+        } else {
+            response = buildTextResponse(405, "Method Not Allowed", "text/plain; charset=utf-8", "405 Method Not Allowed");
+        }
+        send(client, response.c_str(), static_cast<int>(response.size()), 0);
 
         closesocket(client);
     }

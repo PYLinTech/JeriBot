@@ -21,6 +21,8 @@ function selectConversation(id, group, name) {
   activeNav = null;
   ensureGroupExpanded(group);
   setMainTitle(name);
+  document.getElementById("storeView").classList.remove("active");
+  document.getElementById("mainView").classList.add("active");
   const target = chatList.querySelector('.convItem[data-id="' + id + '"][data-group="' + group + '"]');
   if (target) target.classList.add("active");
 }
@@ -29,9 +31,20 @@ function selectNav(navId, label) {
   clearActive();
   activeConvId = null;
   activeNav = navId;
-  setMainTitle(label);
   const btn = document.querySelector('.navButton[data-nav="' + navId + '"]');
   if (btn) btn.classList.add("active");
+
+  const mainView = document.getElementById("mainView");
+  const storeView = document.getElementById("storeView");
+  if (navId === "store") {
+    mainView.classList.remove("active");
+    storeView.classList.add("active");
+    loadStoreSource().finally(() => loadStore(storeState.category));
+  } else {
+    storeView.classList.remove("active");
+    mainView.classList.add("active");
+    setMainTitle(label);
+  }
 }
 
 function ensureGroupExpanded(group) {
@@ -61,10 +74,21 @@ document.getElementById("toggleSidebar").addEventListener("click", () => {
   document.getElementById("toggleSidebar").setAttribute("aria-label", app.classList.contains("collapsed") ? "展开侧边栏" : "折叠侧边栏");
 });
 overlay.addEventListener("click", closeSidebar);
-document.querySelector(".mobileMenuBtn").addEventListener("click", () => { if (isMobile()) openSidebar(); });
+document.querySelectorAll(".mobileMenuBtn").forEach(btn => btn.addEventListener("click", () => { if (isMobile()) openSidebar(); }));
 mql.addEventListener("change", () => { if (!isMobile()) app.classList.remove("open"); });
 
-async function api(path, options) { return (await fetch(path, options)).json(); }
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = { result: "error", message: text }; }
+  }
+  if (!response.ok) {
+    throw new Error(data.message || `${response.status} ${response.statusText}`);
+  }
+  return data;
+}
 
 function escapeHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
@@ -323,7 +347,628 @@ document.querySelectorAll(".actionButton")[1].addEventListener("click", function
 });
 
 document.querySelectorAll(".navButton").forEach(btn => {
-  btn.addEventListener("click", () => selectNav(btn.dataset.nav, btn.querySelector(".navLabel").textContent));
+  btn.addEventListener("click", () => { selectNav(btn.dataset.nav, btn.querySelector(".navLabel").textContent); if (isMobile()) closeSidebar(); });
 });
+
+const STORE_TYPES = {
+  personality: "人格",
+  skill: "技能",
+  memory: "记忆",
+  tool: "工具",
+  local: "本地"
+};
+
+const STORE_SOURCE_LABELS = {
+  china: "国内源",
+  global: "国际源",
+  custom: "自定义源"
+};
+
+const storeState = {
+  category: "personality",
+  source: "",
+  sourceUrl: "",
+  sourceRawUrl: "",
+  sources: [],
+  packages: [],
+  installed: { byId: {}, byKey: {}, list: [] },
+  search: "",
+  loading: false,
+  localPack: null,
+  requestSeq: 0
+};
+
+function categoryLabel(cat) { return STORE_TYPES[cat] || cat || "-"; }
+function sourceLabel(source) { return STORE_SOURCE_LABELS[source] || source || "-"; }
+
+function storeEls() {
+  return {
+    sourcePicker: document.getElementById("storeSourcePicker"),
+    sourceButton: document.getElementById("storeSourceButton"),
+    sourceButtonText: document.getElementById("storeSourceButtonText"),
+    sourceMenu: document.getElementById("storeSourceMenu"),
+    editCustomSourceBtn: document.getElementById("storeEditCustomSourceBtn"),
+    searchInput: document.getElementById("storeSearchInput"),
+    message: document.getElementById("storeMessage"),
+    remotePane: document.getElementById("storeRemotePane"),
+    localPane: document.getElementById("storeLocalPane"),
+    stats: document.getElementById("storeStats"),
+    list: document.getElementById("storeItemList"),
+    dropZone: document.getElementById("storeZipDropZone"),
+    fileInput: document.getElementById("storeZipInput"),
+    localCard: document.getElementById("storeLocalPackCard"),
+    installLocalBtn: document.getElementById("installLocalPackBtn")
+  };
+}
+
+function setStoreMessage(text = "", type = "") {
+  const { message } = storeEls();
+  message.textContent = text;
+  message.className = "storeMessage";
+  if (type) message.classList.add(type);
+}
+
+function setStoreLoading(loading) {
+  storeState.loading = loading;
+  const { sourceButton, editCustomSourceBtn, installLocalBtn } = storeEls();
+  sourceButton.disabled = loading;
+  editCustomSourceBtn.disabled = loading;
+  installLocalBtn.disabled = loading || !storeState.localPack?.temp_id;
+  document.querySelectorAll(".storeActionButton").forEach(btn => { btn.disabled = loading; });
+}
+
+function normalizeInstalled(data) {
+  const raw = data?.installed && typeof data.installed === "object" ? data.installed : {};
+  const result = { byId: {}, byKey: {}, list: [] };
+  for (const key of Object.keys(raw)) {
+    const entry = raw[key] && typeof raw[key] === "object" ? raw[key] : {};
+    const dot = key.indexOf(".");
+    const uploader = entry.uploader || (dot > 0 ? key.slice(0, dot) : "");
+    const id = entry.id || (dot > 0 ? key.slice(dot + 1) : key);
+    const item = { ...entry, id, uploader, key };
+    result.list.push(item);
+    if (id) result.byId[id] = item;
+    if (uploader && id) result.byKey[`${uploader}.${id}`] = item;
+  }
+  return result;
+}
+
+function packageInstallKey(pkg) {
+  return pkg?.uploader && pkg?.id ? `${pkg.uploader}.${pkg.id}` : (pkg?.id || "");
+}
+
+function getInstalledForPackage(pkg) {
+  return storeState.installed.byKey[packageInstallKey(pkg)] || storeState.installed.byId[pkg?.id || ""];
+}
+
+function getInstalledIconUrl(type, id) {
+  return `/api/store/icon?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`;
+}
+
+function getLocalIconUrl(tempId) {
+  return `/api/store/icon?temp_id=${encodeURIComponent(tempId)}`;
+}
+
+function getRemoteIconUrl(type, id) {
+  return `/api/store/icon?remote=1&type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`;
+}
+
+function resolveStoreIcon(icon) {
+  const value = String(icon || "").trim();
+  if (!value) return "";
+  if (/^data:image\//i.test(value)) return value;
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^[A-Za-z0-9+/=]+$/.test(value) && value.length > 64) return `data:image/x-icon;base64,${value}`;
+  try {
+    const base = storeState.sourceUrl ? new URL(storeState.sourceUrl).href : window.location.href;
+    return new URL(value, base).href;
+  } catch {
+    return "";
+  }
+}
+
+function isInlineStoreIcon(icon) {
+  const value = String(icon || "").trim();
+  return /^data:image\//i.test(value) || (/^[A-Za-z0-9+/=]+$/.test(value) && value.length > 64);
+}
+
+function packageIconUrl(pkg, installed) {
+  if (installed) return getInstalledIconUrl(storeState.category, pkg.id);
+  if (pkg?.id && pkg?.icon && !isInlineStoreIcon(pkg.icon)) {
+    return getRemoteIconUrl(storeState.category, pkg.id);
+  }
+  return resolveStoreIcon(pkg?.icon);
+}
+
+function bindStoreIcon(img, iconUrl, fallbackIconClass) {
+  if (!img) return;
+  const icon = img.parentElement.querySelector("i");
+  img.classList.add("hidden");
+  img.removeAttribute("src");
+  if (icon) icon.style.display = "";
+  if (!iconUrl) return;
+
+  img.onload = () => {
+    img.classList.remove("hidden");
+    if (icon) icon.style.display = "none";
+  };
+  img.onerror = () => {
+    img.classList.add("hidden");
+    if (icon) icon.style.display = "";
+  };
+  if (fallbackIconClass && icon) icon.className = fallbackIconClass;
+  img.src = iconUrl;
+}
+
+function mergeStorePackages(remotePackages, installedData) {
+  const merged = [];
+  const seen = new Set();
+  for (const pkg of remotePackages) {
+    const key = packageInstallKey(pkg);
+    if (key) seen.add(key);
+    if (pkg?.id) seen.add(pkg.id);
+    merged.push(pkg);
+  }
+  for (const item of installedData.list) {
+    const fullKey = item.uploader && item.id ? `${item.uploader}.${item.id}` : item.id;
+    if (!item.id || seen.has(fullKey) || seen.has(item.id)) continue;
+    seen.add(fullKey || item.id);
+    merged.push({
+      id: item.id,
+      uploader: item.uploader,
+      name: item.name || item.id,
+      description: item.description || "已安装到本地",
+      version: item.version,
+      icon: item.icon,
+      installedOnly: true
+    });
+  }
+  return merged;
+}
+
+function getFilteredPackages() {
+  const q = storeState.search.trim().toLowerCase();
+  if (!q) return storeState.packages;
+  return storeState.packages.filter(pkg => [
+    pkg.name,
+    pkg.id,
+    pkg.uploader,
+    pkg.author,
+    pkg.description,
+    pkg.version
+  ].some(v => String(v || "").toLowerCase().includes(q)));
+}
+
+async function loadStoreSource() {
+  const { sourceButtonText, sourceMenu, editCustomSourceBtn } = storeEls();
+  try {
+    const data = await api("/api/store/source");
+    storeState.source = data.current || "";
+    storeState.sourceUrl = data.url || "";
+    storeState.sourceRawUrl = data.raw_url || data.url || "";
+    storeState.sources = Array.isArray(data.sources) ? data.sources : [];
+
+    sourceButtonText.textContent = sourceLabel(storeState.source);
+    sourceMenu.innerHTML = "";
+    for (const src of storeState.sources) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "storeSourceOption";
+      option.dataset.source = src.name || "";
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", src.name === storeState.source ? "true" : "false");
+      option.innerHTML = '<span></span><small></small><i class="ri-check-line" aria-hidden="true"></i>';
+      option.querySelector("span").textContent = sourceLabel(src.name);
+      option.querySelector("small").textContent = src.url || "尚未设置";
+      option.addEventListener("click", () => switchStoreSource(src.name || ""));
+      sourceMenu.appendChild(option);
+    }
+    editCustomSourceBtn.classList.toggle("hidden", storeState.source !== "custom");
+  } catch (e) {
+    setStoreMessage(`源设置读取失败：${e.message || e}`, "error");
+  }
+}
+
+async function loadStore(category = storeState.category) {
+  const seq = ++storeState.requestSeq;
+  storeState.category = category;
+  document.querySelectorAll(".storeTab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.storeCat === category);
+  });
+
+  const isLocal = category === "local";
+  const { remotePane, localPane, searchInput } = storeEls();
+  remotePane.classList.toggle("hidden", isLocal);
+  localPane.classList.toggle("hidden", !isLocal);
+  searchInput.disabled = isLocal;
+
+  if (isLocal) {
+    renderLocalPackPreview();
+    setStoreMessage("");
+    return;
+  }
+
+  setStoreLoading(true);
+  setStoreMessage(`正在加载${categoryLabel(category)}...`, "info");
+  try {
+    const [remoteResult, installedResult] = await Promise.allSettled([
+      api(`/api/store/list?type=${encodeURIComponent(category)}`),
+      api(`/api/store/installed?type=${encodeURIComponent(category)}`)
+    ]);
+
+    const remoteData = remoteResult.status === "fulfilled" ? remoteResult.value : null;
+    const installedData = installedResult.status === "fulfilled" ? installedResult.value : null;
+    if (seq !== storeState.requestSeq) return;
+    storeState.installed = normalizeInstalled(installedData);
+    storeState.packages = mergeStorePackages(Array.isArray(remoteData?.packages) ? remoteData.packages : [], storeState.installed);
+    renderStoreItems();
+    if (remoteResult.status === "rejected" && installedResult.status === "fulfilled") {
+      setStoreMessage(`当前源连接失败，已显示本地内容：${remoteResult.reason?.message || remoteResult.reason}`, "error");
+    } else if (installedResult.status === "rejected" && remoteResult.status === "fulfilled") {
+      setStoreMessage(`列表已加载，本地内容读取失败：${installedResult.reason?.message || installedResult.reason}`, "error");
+    } else if (remoteResult.status === "rejected" && installedResult.status === "rejected") {
+      setStoreMessage(`加载失败：${remoteResult.reason?.message || remoteResult.reason}`, "error");
+    } else {
+      setStoreMessage("");
+    }
+  } catch (e) {
+    if (seq !== storeState.requestSeq) return;
+    storeState.packages = [];
+    storeState.installed = { byId: {}, byKey: {}, list: [] };
+    renderStoreItems();
+    setStoreMessage(`加载失败：${e.message || e}`, "error");
+  } finally {
+    if (seq === storeState.requestSeq) setStoreLoading(false);
+  }
+}
+
+function renderStoreItems() {
+  const { list, stats } = storeEls();
+  const filtered = getFilteredPackages();
+  const installedCount = storeState.packages.filter(pkg => !!getInstalledForPackage(pkg)).length;
+  stats.textContent = `${categoryLabel(storeState.category)} · 共 ${storeState.packages.length} 项 · 已安装 ${installedCount} 项`;
+  list.innerHTML = "";
+
+  if (filtered.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "storeEmptyState";
+    empty.innerHTML = '<i class="ri-inbox-line" aria-hidden="true"></i><strong></strong>';
+    empty.querySelector("strong").textContent = storeState.search ? "没有找到相关内容" : "这里还没有内容";
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const pkg of filtered) {
+    const installed = getInstalledForPackage(pkg);
+    const card = document.createElement("article");
+    card.className = "storePackage";
+    card.innerHTML = `
+      <div class="storePackageIcon"><img class="storePackageImage hidden" alt=""><i aria-hidden="true"></i></div>
+      <div class="storePackageBody">
+        <div class="storePackageHead">
+          <strong></strong>
+          <span class="storeBadge"></span>
+        </div>
+        <p class="storePackageDesc"></p>
+        <div class="storePackageMeta"></div>
+      </div>
+      <button class="storeActionButton" type="button"></button>`;
+
+    const fallbackIconClass = {
+      personality: "ri-user-smile-line",
+      skill: "ri-magic-line",
+      memory: "ri-brain-line",
+      tool: "ri-tools-line"
+    }[storeState.category] || "ri-archive-line";
+    card.querySelector(".storePackageIcon i").className = fallbackIconClass;
+    bindStoreIcon(card.querySelector(".storePackageImage"), packageIconUrl(pkg, installed), fallbackIconClass);
+    card.querySelector(".storePackageHead strong").textContent = pkg.name || pkg.id || "未命名内容";
+    card.querySelector(".storeBadge").textContent = `v${pkg.version || "-"}`;
+    card.querySelector(".storePackageDesc").textContent = pkg.description || "暂无说明";
+
+    const meta = [];
+    if (pkg.uploader || pkg.author) meta.push(pkg.uploader || pkg.author);
+    if (pkg.id) meta.push(pkg.id);
+    if (pkg.installedOnly) meta.push("本地");
+    if (installed) meta.push(`已安装 ${installed.version || pkg.version || ""}`.trim());
+    card.querySelector(".storePackageMeta").textContent = meta.join(" · ");
+
+    const action = card.querySelector(".storeActionButton");
+    action.classList.toggle("danger", !!installed);
+    action.innerHTML = installed
+      ? '<i class="ri-delete-bin-line" aria-hidden="true"></i><span>卸载</span>'
+      : '<i class="ri-download-cloud-2-line" aria-hidden="true"></i><span>安装</span>';
+    action.addEventListener("click", () => {
+      if (installed) uninstallItem(storeState.category, pkg.id, pkg.name || pkg.id);
+      else installRemoteItem(storeState.category, pkg.id, pkg.name || pkg.id);
+    });
+
+    list.appendChild(card);
+  }
+}
+
+async function installRemoteItem(type, id, name) {
+  if (!type || !id) return;
+  setStoreLoading(true);
+  setStoreMessage(`正在安装 ${name}...`, "info");
+  try {
+    const data = await api("/api/store/remote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, id })
+    });
+    if (data.result !== "success") throw new Error(data.message || "安装失败");
+    await loadStore(type);
+    setStoreMessage(`已安装 ${name}`, "success");
+  } catch (e) {
+    setStoreMessage(`安装失败：${e.message || e}`, "error");
+  } finally {
+    setStoreLoading(false);
+  }
+}
+
+async function uninstallItem(type, id, name) {
+  if (!type || !id) return;
+  setStoreLoading(true);
+  setStoreMessage(`正在卸载 ${name}...`, "info");
+  try {
+    const data = await api("/api/store/uninstall", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, id })
+    });
+    if (data.result !== "success") throw new Error(data.message || "卸载失败");
+    await loadStore(type);
+    setStoreMessage(`已卸载 ${name}`, "success");
+  } catch (e) {
+    setStoreMessage(`卸载失败：${e.message || e}`, "error");
+  } finally {
+    setStoreLoading(false);
+  }
+}
+
+async function handleLocalZipUpload(file) {
+  if (!file || !file.name.toLowerCase().endsWith(".zip")) {
+    setStoreMessage("请选择 zip 文件", "error");
+    return;
+  }
+
+  storeState.localPack = null;
+  renderLocalPackPreview();
+  setStoreLoading(true);
+  setStoreMessage(`正在读取 ${file.name}...`, "info");
+  try {
+    const response = await fetch("/api/store/local", {
+      method: "POST",
+      body: await file.arrayBuffer()
+    });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text }; }
+    if (!response.ok || data.result !== "success") throw new Error(data.message || "读取失败");
+    storeState.localPack = { ...data, fileName: file.name };
+    renderLocalPackPreview();
+    setStoreMessage(`已识别 ${data.name || data.id || file.name}`, "success");
+  } catch (e) {
+    setStoreMessage(`读取失败：${e.message || e}`, "error");
+  } finally {
+    setStoreLoading(false);
+  }
+}
+
+function renderLocalPackPreview() {
+  const pack = storeState.localPack;
+  const { localCard, installLocalBtn } = storeEls();
+  localCard.classList.toggle("hidden", !pack);
+  installLocalBtn.disabled = storeState.loading || !pack?.temp_id;
+  const previewIcon = document.getElementById("storeLocalPackIcon");
+  if (!pack) {
+    previewIcon.classList.add("hidden");
+    previewIcon.removeAttribute("src");
+    return;
+  }
+
+  document.getElementById("storeLocalPackName").textContent = pack.name || pack.id || "未命名内容";
+  document.getElementById("storeLocalPackFile").textContent = pack.fileName || "本地 zip";
+  document.getElementById("storeLocalPackVersion").textContent = `v${pack.version || "-"}`;
+  document.getElementById("storeLocalPackType").textContent = categoryLabel(pack.type);
+  document.getElementById("storeLocalPackId").textContent = pack.id || "-";
+  document.getElementById("storeLocalPackUploader").textContent = pack.uploader || "-";
+  document.getElementById("storeLocalPackDesc").textContent = pack.description || "暂无说明";
+  previewIcon.classList.add("hidden");
+  previewIcon.onerror = () => { previewIcon.classList.add("hidden"); };
+  previewIcon.onload = () => { previewIcon.classList.remove("hidden"); };
+  const iconUrl = pack.temp_id ? getLocalIconUrl(pack.temp_id) : resolveStoreIcon(pack.icon);
+  if (iconUrl) previewIcon.src = iconUrl;
+  else previewIcon.removeAttribute("src");
+}
+
+async function installLocalPack() {
+  const pack = storeState.localPack;
+  if (!pack?.type || !pack?.id || !pack?.temp_id) return;
+
+  setStoreLoading(true);
+  setStoreMessage(`正在安装 ${pack.name || pack.id}...`, "info");
+  try {
+    const data = await api("/api/store/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: pack.type, id: pack.id, temp_id: pack.temp_id })
+    });
+    if (data.result !== "success") throw new Error(data.message || "安装失败");
+    const installedType = pack.type;
+    storeState.localPack = null;
+    renderLocalPackPreview();
+    setStoreMessage(`已安装 ${pack.name || pack.id}`, "success");
+    if (storeState.category === installedType) await loadStore(installedType);
+  } catch (e) {
+    setStoreMessage(`安装失败：${e.message || e}`, "error");
+  } finally {
+    setStoreLoading(false);
+  }
+}
+
+async function switchStoreSource(source) {
+  if (!source || source === storeState.source) return;
+
+  hideStoreSourceMenu();
+  hideCustomSourceEditor();
+  setStoreLoading(true);
+  setStoreMessage(`正在切换到${sourceLabel(source)}...`, "info");
+  try {
+    const data = await api("/api/store/switch-source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source })
+    });
+    if (data.result !== "success") throw new Error(data.message || "切换失败");
+    await loadStoreSource();
+    await loadStore(storeState.category);
+    setStoreMessage(`已切换到${sourceLabel(source)}`, "success");
+  } catch (e) {
+    setStoreMessage(`切换失败：${e.message || e}`, "error");
+  } finally {
+    setStoreLoading(false);
+  }
+}
+
+function toggleStoreSourceMenu() {
+  const { sourceButton, sourceMenu } = storeEls();
+  const open = sourceMenu.classList.contains("hidden");
+  sourceMenu.classList.toggle("hidden", !open);
+  sourceButton.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function hideStoreSourceMenu() {
+  const { sourceButton, sourceMenu } = storeEls();
+  sourceMenu.classList.add("hidden");
+  sourceButton.setAttribute("aria-expanded", "false");
+}
+
+function hideCustomSourceEditor() {
+  const editor = document.getElementById("storeCustomSourceEditor");
+  if (editor) editor.remove();
+}
+
+function showCustomSourceEditor(anchor) {
+  hideCustomSourceEditor();
+  const editor = document.createElement("div");
+  editor.id = "storeCustomSourceEditor";
+  editor.className = "storeCustomSourceEditor";
+  editor.innerHTML = `
+    <label>
+      <span>自定义源地址</span>
+      <input id="storeCustomSourceInput" type="text" autocomplete="off">
+    </label>
+    <button id="storeSaveCustomSourceBtn" type="button"><i class="ri-check-line" aria-hidden="true"></i><span>保存</span></button>`;
+  document.body.appendChild(editor);
+
+  const input = editor.querySelector("#storeCustomSourceInput");
+  input.value = storeState.sourceRawUrl || "";
+  input.focus();
+  input.select();
+
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(420, Math.max(280, window.innerWidth - 24));
+  editor.style.width = `${width}px`;
+  let left = rect.right - width;
+  let top = rect.bottom + 8;
+  left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+  if (top + 132 > window.innerHeight) top = Math.max(8, rect.top - 132);
+  editor.style.left = `${left}px`;
+  editor.style.top = `${top}px`;
+
+  editor.querySelector("#storeSaveCustomSourceBtn").addEventListener("click", saveCustomSourceUrl);
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveCustomSourceUrl();
+    } else if (e.key === "Escape") {
+      hideCustomSourceEditor();
+    }
+  });
+}
+
+async function saveCustomSourceUrl() {
+  const input = document.getElementById("storeCustomSourceInput");
+  const url = input ? input.value.trim() : "";
+  if (!url) {
+    setStoreMessage("请填写自定义源地址", "error");
+    return;
+  }
+  setStoreLoading(true);
+  setStoreMessage("正在保存自定义源...", "info");
+  try {
+    const data = await api("/api/store/custom-source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    });
+    if (data.result !== "success") throw new Error(data.message || "保存失败");
+    hideCustomSourceEditor();
+    await loadStoreSource();
+    if (storeState.source !== "custom") {
+      await switchStoreSource("custom");
+    } else {
+      await loadStore(storeState.category);
+      setStoreMessage("自定义源已保存", "success");
+    }
+  } catch (e) {
+    setStoreMessage(`保存失败：${e.message || e}`, "error");
+  } finally {
+    setStoreLoading(false);
+  }
+}
+
+function setupStore() {
+  const { dropZone, localPane, fileInput, searchInput, sourceButton, editCustomSourceBtn, installLocalBtn } = storeEls();
+
+  document.querySelectorAll(".storeTab").forEach(btn => {
+    btn.addEventListener("click", () => loadStore(btn.dataset.storeCat));
+  });
+
+  searchInput.addEventListener("input", () => {
+    storeState.search = searchInput.value;
+    renderStoreItems();
+  });
+
+  sourceButton.addEventListener("click", toggleStoreSourceMenu);
+  editCustomSourceBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    showCustomSourceEditor(editCustomSourceBtn);
+  });
+  document.addEventListener("click", e => {
+    const { sourcePicker } = storeEls();
+    if (!sourcePicker.contains(e.target)) hideStoreSourceMenu();
+    const editor = document.getElementById("storeCustomSourceEditor");
+    if (editor && !editor.contains(e.target) && !editCustomSourceBtn.contains(e.target)) hideCustomSourceEditor();
+  });
+
+  installLocalBtn.addEventListener("click", installLocalPack);
+  dropZone.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", e => {
+    const file = e.target.files && e.target.files[0];
+    if (file) handleLocalZipUpload(file);
+    fileInput.value = "";
+  });
+
+  [dropZone, localPane].forEach(el => {
+    el.addEventListener("dragover", e => {
+      e.preventDefault();
+      dropZone.classList.add("dragging");
+    });
+    el.addEventListener("dragleave", e => {
+      if (!el.contains(e.relatedTarget)) dropZone.classList.remove("dragging");
+    });
+    el.addEventListener("drop", e => {
+      e.preventDefault();
+      dropZone.classList.remove("dragging");
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) handleLocalZipUpload(file);
+    });
+  });
+}
+
+setupStore();
 
 loadConversations();

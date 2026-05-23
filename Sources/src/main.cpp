@@ -4,6 +4,7 @@
 #include "Conversation/ConversationManager.h"
 #include "Error/ErrorManager.h"
 #include "Server/Server.h"
+#include "Store/StoreManager.h"
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
@@ -42,7 +43,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         return 1;
     }
 
-    JeriBot::Server server(port, &conversation);
+    JeriBot::StoreManager store;
+    if (!store.initialize(&config, error)) {
+        JeriBot::showError("商店初始化失败：" + error);
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return 1;
+    }
+
+    JeriBot::Server server(port, &conversation, &store);
     if (!server.start(error)) {
         JeriBot::showError("服务启动失败：" + error);
         ReleaseMutex(mutex);
